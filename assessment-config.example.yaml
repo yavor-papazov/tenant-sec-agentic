@@ -1,0 +1,47 @@
+# Example assessment configuration. Copy to assessment-config.yaml and edit.
+# Point paths.repo_root at a checkout of https://github.com/ypapazov/tenant-sec
+
+provider:
+  slug: "scaleway"
+  display_name: "Scaleway"
+  docs_base_url: "https://www.scaleway.com/en/docs"
+  services_in_scope:
+    - { id: "instances", name: "Instances (VMs)", category: "compute.vm" }
+    - { id: "object-storage", name: "Object Storage", category: "storage.object" }
+    - { id: "rdb", name: "Managed Databases", category: "database.relational" }
+    - { id: "kapsule", name: "Kubernetes Kapsule", category: "compute.containers" }
+    - { id: "functions", name: "Serverless Functions", category: "compute.serverless" }
+    - { id: "vpc", name: "VPC", category: "network.vpc" }
+    - { id: "load-balancer", name: "Load Balancers", category: "network.loadbalancer" }
+    - { id: "container-registry", name: "Container Registry", category: "compute.containers" }
+
+controls:
+  scope: "all"
+  # scope:
+  #   - "enc.cmk"
+  #   - "gov.preventive-policy"
+
+models:
+  doc_fetch: "gemini/gemini-2.0-flash"
+  assessor: "gemini/gemini-2.0-flash"
+  skeptic: "gemini/gemini-2.0-flash"
+  consistency: "gemini/gemini-2.0-flash"
+  deep_research: "gemini/gemini-2.0-flash"
+
+limits:
+  max_deep_research_per_run: 10
+  max_search_calls_per_deep_research: 10
+  max_fetch_calls_per_deep_research: 5
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: "../tenant-sec"
+  assessments_dir: "./assessments"
+  reports_dir: "./reports"
+
+session:
+  database_path: "./pipeline_sessions.db"
+  resume_existing: true
+
+# Dry-run without calling LLMs or search APIs (uses mock agent outputs).
+mock_mode: false
