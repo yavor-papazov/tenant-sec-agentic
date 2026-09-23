@@ -29,5 +29,8 @@ INSTRUCTIONS:
 Populate docs_fetched with only url, title, and relevance. The tool runtime
 reattaches fetched content after your structured response; do not repeat full
 page content in the final JSON.
+The complete final JSON must be under 600 tokens. Return at most 3
+docs_fetched entries, keep each title under 120 characters, and never add a
+content, excerpt, quote, or summary field.
 Set services_with_docs and services_without_docs based on in-scope services.
 Set doc_quality to comprehensive, adequate, thin, or absent.

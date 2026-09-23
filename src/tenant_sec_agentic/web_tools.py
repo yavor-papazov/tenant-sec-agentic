@@ -96,7 +96,7 @@ def web_search(query: str, tool_context: ToolContext) -> dict[str, Any]:
 def web_fetch(
     url: str,
     tool_context: ToolContext,
-    max_chars: int = 15000,
+    max_chars: int = 8000,
 ) -> dict[str, Any]:
     """Fetch URL and extract readable text (trafilatura)."""
     mode = tool_context.state.get("pipeline_mode", "doc_fetch")

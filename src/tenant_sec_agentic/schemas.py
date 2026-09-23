@@ -20,7 +20,7 @@ class DocFetchedItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str = Field(default="", max_length=2048)
-    title: str = Field(default="", max_length=240)
+    title: str = Field(default="", max_length=120)
     relevance: Literal["high", "medium", "low"] = "medium"
 
 
