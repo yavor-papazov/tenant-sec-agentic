@@ -1,0 +1,71 @@
+provider:
+  slug: ovhcloud
+  display_name: OVHcloud
+  docs_base_url: https://docs.ovhcloud.com/en/guides/public-cloud
+  assessment_id: ovhcloud/public-cloud/eu-west-par/standard
+  offering:
+    id: public-cloud
+    name: OVHcloud Public Cloud
+    partition: commercial
+    regions: [eu-west-par]
+    edition: standard
+    cohort: eu-public
+  services_in_scope:
+    - { id: instances, name: Public Cloud Instances, category: compute.vm, regions: [eu-west-par], edition: standard }
+    - { id: managed-kubernetes-service, name: Managed Kubernetes Service, category: compute.containers, regions: [eu-west-par], edition: standard }
+    - { id: object-storage, name: Object Storage, category: storage.object, regions: [eu-west-par], edition: standard }
+    - { id: block-storage, name: Block Storage, category: storage.block, regions: [eu-west-par], edition: standard }
+    - { id: postgresql, name: Public Cloud Databases for PostgreSQL, category: database.relational, regions: [eu-west-par], edition: standard }
+    - { id: private-network, name: Private Network and vRack, category: network.vpc, regions: [eu-west-par], edition: standard }
+    - { id: load-balancer, name: Public Cloud Load Balancer, category: network.loadbalancer, regions: [eu-west-par], edition: standard }
+    - { id: key-management-service, name: Key Management Service, category: security.kms, regions: [eu-west-par], edition: standard }
+    - { id: secret-manager, name: Secret Manager, category: security.secrets, regions: [eu-west-par], edition: standard }
+    - { id: iam, name: Identity and Access Management, category: identity.iam, regions: [eu-west-par], edition: standard }
+
+controls:
+  scope: all
+
+models:
+  doc_fetch: vertex_ai/gemini-2.5-flash
+  assessor: vertex_ai/gemini-2.5-flash
+  skeptic: vertex_ai/gemini-2.5-flash
+  consistency: vertex_ai/gemini-2.5-flash
+  deep_research: vertex_ai/gemini-2.5-flash
+
+vertex_traffic_class: standard
+
+pricing:
+  vertex_ai/gemini-2.5-flash:
+    input_per_million: 0.54
+    output_per_million: 4.50
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 12288
+  model_timeout_seconds: 300
+  max_model_turns_per_agent: 12
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.ovhcloud.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false
