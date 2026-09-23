@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,10 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 from tenant_sec_agentic.artifacts import control_entry_for_provider_schema
+
+ASSESSOR_ID = re.compile(
+    r"^(self|community:[a-z0-9_-]+|accredited:[a-z0-9_-]+)$"
+)
 
 
 def load_assessments(folder: Path) -> list[dict]:
@@ -113,6 +118,24 @@ def main(argv: list[str] | None = None) -> None:
             "are not approved or adjusted. Complete human review or pass "
             "--allow-partial."
         )
+    reviewers = {
+        str((assessment.get("review") or {}).get("reviewer") or "")
+        for assessment in assessments
+        if (assessment.get("review") or {}).get("status")
+        in {"approved", "adjusted"}
+    }
+    reviewers.discard("")
+    if not args.allow_partial and len(reviewers) != 1:
+        sys.exit(
+            "Refusing to write profile: approved assessments must have "
+            "one consistent reviewer identity"
+        )
+    assessed_by = next(iter(reviewers), "community:pipeline")
+    if not ASSESSOR_ID.fullmatch(assessed_by):
+        sys.exit(
+            "Reviewer identity must match self, community:{handle}, or "
+            "accredited:{org}"
+        )
 
     schema_path = repo / "schema" / "provider.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -153,7 +176,7 @@ def main(argv: list[str] | None = None) -> None:
         "provider": slug,
         "assessment_id": assessment_id,
         "display_name": display_name,
-        "assessed_by": "community:pipeline",
+        "assessed_by": assessed_by,
         "assessed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "methodology_version": methodology_version,
         "revision": revision,

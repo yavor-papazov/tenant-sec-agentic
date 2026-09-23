@@ -429,10 +429,7 @@ class AssessmentPipeline(BaseAgent):
         if not isinstance(output, dict):
             raise RuntimeError("doc_fetch agent produced no structured output")
         fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-        for document in output.get("docs_fetched") or []:
-            cached = fetched.get(document.get("url"))
-            if isinstance(cached, dict):
-                document["content"] = cached.get("content", "")
+        _normalize_fetched_documents(output, fetched)
         ctx.session.state["doc_fetch_output"] = output
 
     async def _run_assessor(
@@ -823,12 +820,79 @@ def _final_recommendation(
             if score == "mixed"
             else None
         )
-        return status, score, services, conf, skeptic
+        merged = dict(assessor)
+        merged["status"] = status
+        merged["score"] = score
+        if score == "mixed":
+            merged["services"] = services or {}
+        challenge = str(skeptic.get("reasoning") or "").strip()
+        if challenge:
+            merged["evidence"] = (
+                str(assessor.get("evidence") or "").strip()
+                + "\n\nIndependent challenge: "
+                + challenge
+            ).strip()
+        merged["sources_used"] = list(
+            dict.fromkeys(
+                [
+                    *list(assessor.get("sources_used") or []),
+                    *list(skeptic.get("sources_used") or []),
+                ]
+            )
+        )
+        if isinstance(score, int):
+            criteria = []
+            for criterion in assessor.get("criteria_results") or []:
+                revised = dict(criterion)
+                level = revised.get("level")
+                if isinstance(level, int) and level > score:
+                    revised["met"] = False
+                    revised["reasoning"] = (
+                        "Independent challenger did not confirm this level. "
+                        + str(revised.get("reasoning") or "")
+                    ).strip()
+                    revised["claim_ids"] = []
+                criteria.append(revised)
+            merged["criteria_results"] = criteria
+        return status, score, services, conf, merged
 
     status = str(assessor.get("status") or "unknown")
     score = assessor.get("score")
     services = assessor.get("services") if score == "mixed" else None
     return status, score, services, conf, assessor
+
+
+def _normalize_fetched_documents(
+    output: dict[str, Any],
+    fetched: dict[str, Any],
+) -> None:
+    """Keep only fetched URLs and repair model-appended URL garbage."""
+    clean_documents: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for document in output.get("docs_fetched") or []:
+        url = str(document.get("url") or "")
+        cached = fetched.get(url)
+        if not isinstance(cached, dict):
+            matches = [
+                candidate
+                for candidate in fetched
+                if url.startswith(str(candidate))
+            ]
+            if matches:
+                url = str(max(matches, key=lambda value: len(str(value))))
+                cached = fetched.get(url)
+        if not isinstance(cached, dict) or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        document["url"] = url
+        document["content"] = cached.get("content", "")
+        document["title"] = (
+            document.get("title")
+            or cached.get("title")
+            or ""
+        )
+        clean_documents.append(document)
+    output["docs_fetched"] = clean_documents
 
 
 def _reconcile_skeptic(

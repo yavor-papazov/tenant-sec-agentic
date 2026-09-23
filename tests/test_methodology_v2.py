@@ -26,6 +26,7 @@ from tenant_sec_agentic.pipeline import (
     _final_recommendation,
     _load_stage_checkpoint,
     _mock_assessor,
+    _normalize_fetched_documents,
     prompt_hashes,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
@@ -165,6 +166,64 @@ def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):
 def test_consistency_flags_accept_level_labels():
     flag = ConsistencyFlag(current_score="L3", reference_score="L2")
     assert flag.current_score == "L3"
+
+
+def test_challenger_downgrade_preserves_claim_traceability():
+    assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Official evidence supports managed CMKs.",
+        "confidence": "high",
+        "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
+    }
+    skeptic = {
+        "verdict": "downgrade",
+        "recommended_status": "assessed",
+        "recommended_score": 1,
+        "reasoning": "The managed path is incomplete.",
+        "sources_used": ["https://example.com/docs/limits"],
+    }
+    status, score, _, _, final = _final_recommendation(
+        assessor,
+        skeptic,
+        None,
+    )
+    assert (status, score) == ("assessed", 1)
+    assert final["claims"] == assessor["claims"]
+    assert final["evidence_items"] == assessor["evidence_items"]
+    assert final["sources_used"] == [
+        "https://example.com/docs/cmk",
+        "https://example.com/docs/limits",
+    ]
+    assert final["criteria_results"][2]["met"] is False
+
+
+def test_fetched_document_urls_are_repaired_and_deduplicated():
+    url = "https://example.com/docs/image-scanning"
+    output = {
+        "docs_fetched": [
+            {"url": url + "garbage", "title": "", "relevance": "high"},
+            {"url": url, "title": "Duplicate", "relevance": "high"},
+            {
+                "url": "https://unfetched.example/doc",
+                "title": "Unfetched",
+                "relevance": "low",
+            },
+        ]
+    }
+    _normalize_fetched_documents(
+        output,
+        {url: {"title": "Scanning", "content": "Fetched body"}},
+    )
+    assert output["docs_fetched"] == [
+        {
+            "url": url,
+            "title": "Scanning",
+            "relevance": "high",
+            "content": "Fetched body",
+        }
+    ]
 
 
 def test_canonical_entry_retains_sources_and_validates(tmp_path):
