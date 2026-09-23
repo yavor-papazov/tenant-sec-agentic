@@ -283,16 +283,26 @@ Fallback if the demo fails:
 # Live demo II — make the decision reproducible
 
 ```bash
+# No repository clone is required: profiles, controls, and provider data ship
+# inside the package.
+python -m pip install --pre "tenant-sec==1.0.0rc1.post1"
+
 tenant-sec validate providers/scaleway.yaml
 
 tenant-sec detail --provider scaleway \
   --domain logging -v
 
+# Cross-cohort migration comparisons are supported. The CLI labels the output
+# as a raw capability comparison rather than a league-table ranking.
 tenant-sec compare --providers aws,gcp,scaleway \
   --domain encryption
 
 tenant-sec score \
-  --profile profiles/eu-regulated-fintech.yaml
+  --profile eu-regulated-fintech \
+  --providers aws,gcp,scaleway
+
+tenant-sec export --provider scaleway \
+  --format html -o scaleway-assessment.html
 ```
 
 The Python engine adds:
