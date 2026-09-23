@@ -30,6 +30,7 @@ from tenant_sec_agentic.pipeline import (
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
 from tenant_sec_agentic.batch_cli import BudgetTracker, artifact_is_current
+from tenant_sec_agentic.review_apply_cli import apply_manifest
 from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.metered_model import MeteredLiteLlm
 from tenant_sec_agentic.schemas import (
@@ -474,6 +475,39 @@ def test_review_bundle_surfaces_claims_and_skeptic_flags():
     assert "enc.cmk" in bundle
     assert "The API accepts a customer key identifier." in bundle
     assert "Check all services." in bundle
+
+
+def test_review_manifest_applies_explicit_decision(tmp_path):
+    artifact_path = tmp_path / "enc.cmk.yaml"
+    artifact_path.write_text(
+        yaml.safe_dump(
+            {
+                "control": "enc.cmk",
+                "review": {"status": "pending"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "assessments": [
+                    {
+                        "control": "enc.cmk",
+                        "artifact_path": str(artifact_path),
+                        "decision": "approved",
+                        "notes": "Evidence checked.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert apply_manifest(manifest_path, "human:reviewer") == (1, 0)
+    reviewed = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
+    assert reviewed["review"]["status"] == "approved"
+    assert reviewed["review"]["reviewer"] == "human:reviewer"
 
 
 def test_approved_unknown_survives_aggregation_without_score():
