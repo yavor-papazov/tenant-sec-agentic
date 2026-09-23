@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> None:
     cfg = load_assessment_config(args.config.resolve())
     if args.session_database is not None:
         cfg.session.database_path = args.session_database.resolve()
+    if args.controls:
+        cfg.controls_scope = args.controls
     state = initial_session_state(cfg)
     if args.controls:
         available = {

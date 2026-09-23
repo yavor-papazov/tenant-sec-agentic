@@ -30,6 +30,7 @@ from tenant_sec_agentic.pipeline import (
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
 from tenant_sec_agentic.batch_cli import BudgetTracker, artifact_is_current
+from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.metered_model import MeteredLiteLlm
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
@@ -442,6 +443,37 @@ def test_single_control_usage_gets_concurrency_safe_ledger(tmp_path):
         / "enc.cmk.json"
     )
     assert path.is_file()
+
+
+def test_review_bundle_surfaces_claims_and_skeptic_flags():
+    artifact = {
+        "control": "enc.cmk",
+        "recommended_score": 2,
+        "result_status": "assessed",
+        "overall_confidence": "medium",
+        "assessor": {
+            "evidence": "CMK support is documented.",
+            **_claims(),
+        },
+        "skeptic": {
+            "reasoning": "Coverage may vary.",
+            "skepticism_flags": [
+                {
+                    "type": "scope",
+                    "severity": "warning",
+                    "detail": "Check all services.",
+                }
+            ],
+        },
+        "consistency": {
+            "overall_consistency": "minor_tension",
+            "consistency_flags": [],
+        },
+    }
+    bundle = render_bundle("example", [artifact])
+    assert "enc.cmk" in bundle
+    assert "The API accepts a customer key identifier." in bundle
+    assert "Check all services." in bundle
 
 
 def test_approved_unknown_survives_aggregation_without_score():

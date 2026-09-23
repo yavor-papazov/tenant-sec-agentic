@@ -307,13 +307,7 @@ async def _run_provider(
     controls = load_all_controls(cfg.paths.repo_root)
     scope = resolve_control_scope(cfg.controls_scope, controls)
     if selected_controls:
-        missing = sorted(set(selected_controls) - set(scope))
-        if missing:
-            raise ValueError(
-                f"{cfg.provider.slug}: controls outside configured scope: "
-                + ", ".join(missing)
-            )
-        scope = [control_id for control_id in scope if control_id in selected_controls]
+        scope = resolve_control_scope(selected_controls, controls)
     completed: list[str] = []
     failed: list[str] = []
     control_semaphore = asyncio.Semaphore(control_parallelism)

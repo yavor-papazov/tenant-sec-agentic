@@ -28,6 +28,7 @@ dev = ["pytest>=8.0"]
 tenant-sec-pipeline = "tenant_sec_agentic.cli:main"
 tenant-sec-aggregate = "tenant_sec_agentic.aggregate_cli:main"
 tenant-sec-batch = "tenant_sec_agentic.batch_cli:main"
+tenant-sec-review-bundle = "tenant_sec_agentic.review_bundle_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tenant_sec_agentic"]
