@@ -210,34 +210,36 @@ search, and SQLite session persistence only if the audience is technical.
 
 # Release-candidate reality check
 
-## Current Scaleway Public Cloud pilot
+## RC1 produced a complete comparison matrix
 
-**5 controls · 3 services · 1 region · all reviews still pending**
+**4 providers × 62 controls = 248 assessment artifacts**
 
-- **Reached human review:** MFA enforcement **L2**; preventive policy **L0**; control-plane audit **MIX**
-- **Incomplete runs:** CMK failed on model availability; residency reached an L2 recommendation but exhausted the run’s call budget
-- **Latest 3-control run:** 31 model calls · 230k input tokens · 8 searches · 6 fetches · 4 retries
-- **Metered model cost:** **$0.34 actual** vs **$1.90 conservatively projected**
+- **Pipeline outcome:** 242 reached the human-review gate (**97.6%**); 6 ended in error
+- **Recommendation mix:** L0 **9** · L1 **27** · L2 **87** · L3 **70** · MIX **43** · unknown/unscored **12**
+- **Evidence workload:** 2,911 model calls · 23.1M input tokens · 5.5M output tokens · 657 searches · 681 fetches
+- **Current-artifact model cost:** **$139.72** — about **$0.56 per assessment**
+- **Batch ledger charged:** **$196.97**, including failed and retried attempts
 
-### The failures are part of the result
+### The boundary
 
-Budget exhaustion, thin documentation, model outages, and service-level gaps must remain visible.
+All **248 reviews are still pending**. These are agent recommendations, not publication-ready provider scores.
 
 <!--
 Timing: 4 minutes.
 
-Be explicit:
-- These are pilot artefacts, not approved provider findings.
-- Three of five controls reached the human-review gate; two ended in error.
-- The $0.34 ledger covers the latest three-control live run, not the full five-control
-  history and not a 67-control extrapolation.
-- Six calls lacked provider usage metadata, so projected cost is intentionally
-  conservative.
+Explain the denominators:
+- The matrix contains 62 controls for each of AWS, Azure, GCP, and Scaleway.
+- 242 artifacts reached `needs_human_review`; six preserve an explicit pipeline error.
+- 236 have scored recommendations. Twelve remain unknown or unscored.
+- The maturity counts are raw control recommendations, not weighted provider scores.
 
-The useful engineering lesson is that the pipeline can stop, preserve partial work,
-and explain why it stopped.
+Explain the cost figures:
+- $139.72 is the sum of actual model cost attached to the 248 current per-control ledgers.
+- $196.97 is the batch ledger's charged total and includes failed/retried work.
+- Search-provider cost is tracked separately.
 
-[RC PLACEHOLDER: replace these figures with the final release-candidate run.]
+The useful engineering result is not just throughput: failures, retries, uncertainty,
+and cost remain inspectable rather than disappearing behind a final average.
 -->
 
 ---
@@ -318,40 +320,39 @@ Do not present the current sample ranking as v2 publication-ready.
 
 ---
 
-# What the evidence says—and what remains open
+# What the data already says
 
-## Pilot hypotheses, pending human review
+## Five provisional patterns across the RC1 matrix
 
-| Offering | Visible strength | Visible limitation / open question |
+| Control | Current agent recommendation | What it exposes |
 |---|---|---|
-| Scaleway Public Cloud | Organization MFA; contractual residency evidence | No confirmed hierarchical deny guardrail; audit coverage varies by service; CMK unresolved |
-| OVHcloud Public Cloud | **[RC: assess]** | **[RC: assess]** |
-| STACKIT / IONOS | **[RC: assess]** | **[RC: assess]** |
-| Hetzner Cloud | Useful European option | Compare in a thin-managed-IaaS cohort—not the same league table |
+| Preventive policy | GCP **L3** · Azure **MIX** · AWS **L2** · Scaleway **L0** | Depth of hierarchical deny and policy simulation |
+| MFA enforcement | AWS / Azure **L3** · GCP / Scaleway **L2** | Console MFA is not the same as API/CLI enforcement |
+| External keys | AWS / GCP **L3** · Azure **L2** · Scaleway **L1** | Live external keys vs importing keys into provider custody |
+| Data-plane logging | GCP **L3*** · Azure **L2** · AWS / Scaleway **MIX** | Per-service coverage matters more than one platform label |
+| WAF | AWS / Azure / GCP **L3** · Scaleway **L2** | Managed CRS exists; customization depth differs |
 
-## Before publication
+**Scaleway-specific signal:** `enc.hsm-backing` is **L0**; `gov.preventive-policy` is **L0**; organization MFA and WAF are managed but limited at **L2**.
 
-Complete v2 evidence records · finish provider stubs · human-review the pilot · reassess decisive controls · keep sovereign/dedicated offerings separate
-
-> Better cloud decisions begin by stating exactly what we know, what we do not know, and what would change the answer.
+> Provisional: every review is pending; six errored controls are excluded. GCP’s flat L3 data-plane logging result was flagged by consistency checking for confirmation.
 
 <!--
 Timing: 5 minutes.
 
-Spend roughly three minutes on the Scaleway pilot:
-- MFA looks like a managed but limited L2 because programmatic access is not MFA-gated.
-- Preventive governance appears L0 because the current evidence does not show a
-  hierarchical deny mechanism overriding ordinary IAM allows.
-- Audit is MIX: Instances and managed databases reached L2, while Object Storage
-  was documented as not yet integrated.
-- CMK is unresolved because the run failed; do not turn that into a product claim.
+These rows come directly from the generated assessment YAMLs:
+- Preventive policy: GCP's custom organization constraints reached L3; AWS was
+  downgraded to L2 because SCP/RCP lacks native audit mode and RCP coverage is limited;
+  Azure is MIX because Entra ID is outside the evidenced Azure Policy surface;
+  Scaleway evidence shows IAM grants, but no independent hierarchical deny engine.
+- MFA: AWS and Azure recommendations include enforceable programmatic or conditional
+  paths. GCP and Scaleway reached L2; Scaleway static API keys are not MFA-gated.
+- External keys: AWS XKS and GCP EKM reached L3, Azure L2, and Scaleway BYOK L1.
+  Scaleway's separate HSM-backing control reached L0.
+- Logging: AWS and Scaleway are MIX because service coverage varies. The GCP L3
+  recommendation is explicitly marked for confirmation by the consistency agent.
+- WAF: all four expose a managed path; Scaleway reached L2 because the evidence did
+  not show the customization and bot-management depth required for L3.
 
-Spend one minute explaining the placeholders:
-- M5 plans inventory-first stubs for OVHcloud, Hetzner, STACKIT, IONOS, then other
-  European offerings.
-- No scores should be invented before evidence collection and human review.
-
-Close for one minute with the final quote and invite questions.
-
-[RC PLACEHOLDER: replace placeholder rows with reviewed findings and evidence links.]
+Close by saying these are useful hypotheses precisely because the audience can inspect
+the evidence and challenge them. Human review may confirm, adjust, or reject each row.
 -->
