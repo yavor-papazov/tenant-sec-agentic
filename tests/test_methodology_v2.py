@@ -21,12 +21,14 @@ from tenant_sec_agentic.config import (
     load_assessment_config,
 )
 from tenant_sec_agentic.pipeline import (
+    _canonical_evidence_url,
     _drain_agent,
     _enrich_claim_bundle,
     _final_recommendation,
     _load_stage_checkpoint,
     _mock_assessor,
     _normalize_fetched_documents,
+    _normalize_service_evidence,
     prompt_hashes,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
@@ -224,6 +226,39 @@ def test_fetched_document_urls_are_repaired_and_deduplicated():
             "content": "Fetched body",
         }
     ]
+
+
+def test_evidence_url_matching_ignores_locale_and_query():
+    localized = (
+        "https://learn.microsoft.com/en-us/azure/update-manager/overview"
+        "?tabs=azure-vms"
+    )
+    plain = "https://learn.microsoft.com/azure/update-manager/overview"
+    assert _canonical_evidence_url(localized) == _canonical_evidence_url(plain)
+
+
+def test_unreferenced_service_scores_become_unknown():
+    services = {
+        "document-db": {
+            "status": "assessed",
+            "score": 1,
+            "evidence": "Patching appears provider managed.",
+            "sources_used": [],
+        },
+        "kapsule": {
+            "status": "assessed",
+            "score": 2,
+            "evidence": "Managed upgrades are documented.",
+            "sources_used": ["https://example.com/kapsule"],
+        },
+    }
+    normalized = _normalize_service_evidence(
+        services,
+        {"evidence_items": [], "claims": []},
+    )
+    assert normalized["document-db"]["status"] == "unknown"
+    assert "score" not in normalized["document-db"]
+    assert normalized["kapsule"]["score"] == 2
 
 
 def test_canonical_entry_retains_sources_and_validates(tmp_path):

@@ -11,6 +11,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from google.adk.agents import BaseAgent, LlmAgent
@@ -307,6 +308,13 @@ class AssessmentPipeline(BaseAgent):
                 assessor_out, skeptic_out, deep_out
             )
             )
+            if rec_score == "mixed" and rec_services is not None:
+                rec_services = _normalize_service_evidence(
+                    rec_services,
+                    final_assessor,
+                )
+                final_assessor = dict(final_assessor)
+                final_assessor["services"] = rec_services
 
             control_entry = control_entry_for_provider_schema(
                 result_status,
@@ -714,11 +722,15 @@ def _enrich_claim_bundle(
     for raw in enriched.get("evidence_items") or []:
         item = dict(raw)
         url = str(item.get("url") or "")
-        fetched = fetched_documents.get(url)
+        matched_url, fetched = _match_fetched_document(
+            url,
+            fetched_documents,
+        )
         if not isinstance(fetched, dict) or not fetched.get("content"):
             raise RuntimeError(
                 f"claim evidence URL was not fetched: {url or '<missing>'}"
             )
+        item["url"] = matched_url
         content = str(fetched["content"])
         quote = str(item.get("quote") or "").strip()
         if (
@@ -748,6 +760,40 @@ def _enrich_claim_bundle(
         items.append(item)
     enriched["evidence_items"] = items
     return enriched
+
+
+def _match_fetched_document(
+    url: str,
+    fetched_documents: dict[str, Any],
+) -> tuple[str, Any]:
+    fetched = fetched_documents.get(url)
+    if isinstance(fetched, dict):
+        return url, fetched
+    canonical = _canonical_evidence_url(url)
+    matches = [
+        (str(candidate), value)
+        for candidate, value in fetched_documents.items()
+        if _canonical_evidence_url(str(candidate)) == canonical
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return url, None
+
+
+def _canonical_evidence_url(url: str) -> str:
+    parts = urlsplit(url.strip())
+    path = re.sub(r"/+", "/", parts.path).rstrip("/")
+    if parts.netloc.casefold() == "learn.microsoft.com":
+        path = re.sub(r"^/[a-z]{2}-[a-z]{2}(?=/)", "", path)
+    return urlunsplit(
+        (
+            parts.scheme.casefold(),
+            parts.netloc.casefold(),
+            path,
+            "",
+            "",
+        )
+    )
 
 
 def _normalize_text(value: str) -> str:
@@ -893,6 +939,53 @@ def _normalize_fetched_documents(
         )
         clean_documents.append(document)
     output["docs_fetched"] = clean_documents
+
+
+def _normalize_service_evidence(
+    services: dict[str, Any],
+    assessment: dict[str, Any],
+) -> dict[str, Any]:
+    """Do not publish inferred service scores without a cited source."""
+    evidence_urls = {
+        str(item.get("id")): str(item.get("url"))
+        for item in assessment.get("evidence_items") or []
+        if isinstance(item, dict) and item.get("id") and item.get("url")
+    }
+    urls_by_service: dict[str, list[str]] = {}
+    for claim in assessment.get("claims") or []:
+        if not isinstance(claim, dict):
+            continue
+        urls = [
+            evidence_urls[str(evidence_id)]
+            for evidence_id in claim.get("evidence_item_ids") or []
+            if str(evidence_id) in evidence_urls
+        ]
+        for service_id in claim.get("services") or []:
+            bucket = urls_by_service.setdefault(str(service_id), [])
+            bucket.extend(url for url in urls if url not in bucket)
+
+    normalized: dict[str, Any] = {}
+    for service_id, raw in services.items():
+        value = dict(raw) if isinstance(raw, dict) else {
+            "status": "assessed",
+            "score": raw,
+        }
+        if value.get("status") == "assessed":
+            sources = list(value.get("sources_used") or [])
+            if not sources:
+                sources = urls_by_service.get(str(service_id), [])
+            if sources:
+                value["sources_used"] = sources
+            else:
+                value["status"] = "unknown"
+                value.pop("score", None)
+                value["evidence"] = (
+                    str(value.get("evidence") or "").strip()
+                    + " No service-specific authoritative source was captured."
+                ).strip()
+                value["confidence"] = "low"
+        normalized[str(service_id)] = value
+    return normalized
 
 
 def _reconcile_skeptic(
