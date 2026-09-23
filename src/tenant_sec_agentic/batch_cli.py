@@ -252,19 +252,10 @@ async def _run_control(
                 stdout=output,
                 stderr=asyncio.subprocess.STDOUT,
             )
-            try:
-                exit_code = await asyncio.wait_for(
-                    process.wait(),
-                    timeout=timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=10)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
-                exit_code = 124
+            exit_code = await _wait_for_process(
+                process,
+                timeout_seconds,
+            )
     except Exception as exc:
         with log_path.open("a", encoding="utf-8") as output:
             output.write(f"\nBatch launcher error: {type(exc).__name__}: {exc}\n")
@@ -296,6 +287,38 @@ async def _run_control(
         flush=True,
     )
     return current
+
+
+async def _wait_for_process(
+    process: asyncio.subprocess.Process,
+    timeout_seconds: float,
+) -> int:
+    """Enforce a wall-clock watchdog without wait_for cancellation hangs."""
+    wait_task = asyncio.create_task(process.wait())
+    timer_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
+    try:
+        done, _ = await asyncio.wait(
+            {wait_task, timer_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if wait_task in done:
+            return int(wait_task.result())
+        process.kill()
+        kill_timer = asyncio.create_task(asyncio.sleep(10))
+        try:
+            done, _ = await asyncio.wait(
+                {wait_task, kill_timer},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if wait_task in done:
+                await wait_task
+        finally:
+            kill_timer.cancel()
+        return 124
+    finally:
+        timer_task.cancel()
+        if not wait_task.done():
+            wait_task.cancel()
 
 
 async def _run_provider(

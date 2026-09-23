@@ -32,7 +32,11 @@ from tenant_sec_agentic.pipeline import (
     prompt_hashes,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
-from tenant_sec_agentic.batch_cli import BudgetTracker, artifact_is_current
+from tenant_sec_agentic.batch_cli import (
+    BudgetTracker,
+    _wait_for_process,
+    artifact_is_current,
+)
 from tenant_sec_agentic.review_apply_cli import apply_manifest
 from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.release_check_cli import profile_completeness_errors
@@ -525,6 +529,33 @@ def test_batch_budget_reservations_fail_closed(tmp_path):
 
     asyncio.run(exercise())
     assert tracker.charged_usd == pytest.approx(5.0)
+
+
+def test_batch_process_watchdog_kills_hung_child():
+    class FakeProcess:
+        def __init__(self):
+            import asyncio
+
+            self.stopped = asyncio.Event()
+            self.killed = False
+
+        async def wait(self):
+            await self.stopped.wait()
+            return -9
+
+        def kill(self):
+            self.killed = True
+            self.stopped.set()
+
+    async def exercise():
+        process = FakeProcess()
+        result = await _wait_for_process(process, 0.001)
+        assert result == 124
+        assert process.killed is True
+
+    import asyncio
+
+    asyncio.run(exercise())
 
 
 def test_single_control_usage_gets_concurrency_safe_ledger(tmp_path):
