@@ -303,6 +303,15 @@ tenant-sec score \
 
 tenant-sec export --provider scaleway \
   --format html -o scaleway-assessment.html
+
+# A custom profile is ordinary YAML. Validate it, then score the matching
+# hyperscaler cohort with the workload-specific gates and weights.
+tenant-sec validate examples/ransomware-resilient-saas.yaml \
+  --type scoring-profile
+
+tenant-sec score \
+  --profile examples/ransomware-resilient-saas.yaml \
+  --providers aws,gcp,azure
 ```
 
 The Python engine adds:

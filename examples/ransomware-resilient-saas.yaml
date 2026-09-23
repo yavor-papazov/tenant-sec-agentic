@@ -1,0 +1,38 @@
+---
+name: "ransomware-resilient-saas"
+methodology_version: "2.0"
+cohort: "hyperscaler"
+description: >
+  Example profile for a multi-tenant SaaS platform that prioritizes identity
+  hardening, immutable audit and object data, governed backups, customer-managed
+  encryption, and incident response. The conservative minimum aggregation means
+  a weak service cannot be hidden by stronger services in the same control.
+
+must_have:
+  - control: "iam.mfa-enforcement"
+    min_level: 2
+  - control: "iam.privileged-access"
+    min_level: 2
+  - control: "enc.cmk"
+    min_level: 2
+  - control: "log.immutability"
+    min_level: 2
+  - control: "data.object-retention-immutability"
+    min_level: 2
+  - control: "incident.automated-response"
+    min_level: 1
+
+min_catalog_completeness: 0.75
+
+weights:
+  iam: 0.18
+  governance: 0.10
+  encryption: 0.15
+  network: 0.08
+  logging: 0.15
+  data: 0.20
+  compute: 0.04
+  incident: 0.10
+  supply-chain: 0.00
+
+mixed_aggregation: "min"
