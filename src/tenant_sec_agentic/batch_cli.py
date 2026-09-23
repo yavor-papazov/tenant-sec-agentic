@@ -218,11 +218,15 @@ async def _run_control(
         cfg.paths.reports_dir / cfg.provider.slug / "batch-logs"
     )
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"{control_id}-attempt-{attempt}.log"
+    run_suffix = run_id[:8]
+    log_path = (
+        log_dir
+        / f"{control_id}-attempt-{attempt}-{run_suffix}.log"
+    )
     session_path = (
         log_dir
         / "sessions"
-        / f"{control_id}-attempt-{attempt}.db"
+        / f"{control_id}-attempt-{attempt}-{run_suffix}.db"
     )
     session_path.parent.mkdir(parents=True, exist_ok=True)
     launched_at = datetime.now(timezone.utc)
