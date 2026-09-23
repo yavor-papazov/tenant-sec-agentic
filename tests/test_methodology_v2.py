@@ -28,7 +28,11 @@ from tenant_sec_agentic.pipeline import (
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
 from tenant_sec_agentic.metered_model import MeteredLiteLlm
-from tenant_sec_agentic.schemas import AssessorStructured, SkepticStructured
+from tenant_sec_agentic.schemas import (
+    AssessorStructured,
+    ConsistencyFlag,
+    SkepticStructured,
+)
 from tenant_sec_agentic.usage import (
     BudgetExceeded,
     finalize_model_call,
@@ -109,6 +113,11 @@ def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):
 
     with pytest.raises(ValidationError):
         SkepticStructured(status="assessed", reasoning="incomplete")
+
+
+def test_consistency_flags_accept_level_labels():
+    flag = ConsistencyFlag(current_score="L3", reference_score="L2")
+    assert flag.current_score == "L3"
 
 
 def test_canonical_entry_retains_sources_and_validates(tmp_path):

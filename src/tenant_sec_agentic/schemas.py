@@ -111,8 +111,12 @@ class SkepticStructured(BaseModel):
 class ConsistencyFlag(BaseModel):
     type: str = ""
     reference_provider: str = ""
-    reference_score: int | Literal["mixed"] | None = None
-    current_score: int | Literal["mixed"] | None = None
+    reference_score: (
+        int | Literal["mixed", "L0", "L1", "L2", "L3"] | None
+    ) = None
+    current_score: (
+        int | Literal["mixed", "L0", "L1", "L2", "L3"] | None
+    ) = None
     detail: str = ""
     recommendation: str = ""
 
