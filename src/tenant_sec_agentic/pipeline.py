@@ -18,6 +18,7 @@ from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
+from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 from typing_extensions import override
 
@@ -583,17 +584,6 @@ class AssessmentPipeline(BaseAgent):
     ) -> None:
         dr_prompt = _load_prompt("deep_research.md")
         model = _metered_model(ctx, cfg, "deep_research")
-        agent = LlmAgent(
-            name="deep_research_agent",
-            model=model,
-            instruction=dr_prompt,
-            output_schema=DeepResearchStructured,
-            output_key="deep_research_output",
-            include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
-        )
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
@@ -604,14 +594,38 @@ class AssessmentPipeline(BaseAgent):
             f"CONSISTENCY FLAGS:\n```json\n"
             f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```"
         )
-        await _inject_user_and_drain(
-            agent,
-            ctx,
-            user_text,
-            cfg,
-            "deep_research",
+        request = LlmRequest(
+            model=cfg.model_for("deep_research"),
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=user_text)],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=dr_prompt,
+                max_output_tokens=cfg.limits.max_output_tokens_per_call,
+                response_mime_type="application/json",
+                response_schema=DeepResearchStructured,
+            ),
         )
-        output = ctx.session.state.get("deep_research_output")
+        responses = [
+            response
+            async for response in model.generate_content_async(request)
+        ]
+        if not responses:
+            raise RuntimeError("deep research model returned no response")
+        content = responses[-1].content
+        text = "".join(
+            str(part.text or "")
+            for part in (content.parts if content is not None else [])
+        )
+        if not text:
+            raise RuntimeError("deep research model returned no JSON")
+        output = DeepResearchStructured.model_validate_json(text).model_dump(
+            mode="json"
+        )
+        ctx.session.state["deep_research_output"] = output
         revised = (
             output.get("revised_assessment")
             if isinstance(output, dict)

@@ -1,9 +1,11 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 from google.adk.models import Gemini
+from google.genai import types
 from pydantic import ValidationError
 
 from tenant_sec_agentic.artifacts import (
@@ -21,6 +23,7 @@ from tenant_sec_agentic.config import (
     load_assessment_config,
 )
 from tenant_sec_agentic.pipeline import (
+    AssessmentPipeline,
     _canonical_evidence_url,
     _drain_agent,
     _enrich_claim_bundle,
@@ -50,6 +53,7 @@ from tenant_sec_agentic.metered_model import (
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
     ConsistencyFlag,
+    DeepResearchStructured,
     SkepticStructured,
 )
 from tenant_sec_agentic.usage import (
@@ -290,6 +294,62 @@ def test_optional_deep_research_is_time_and_retry_bounded(tmp_path):
     assert _retry_attempts(config, "assessor") == 3
     assert model_timeout_seconds(config, "deep_research") == 120
     assert model_timeout_seconds(config, "assessor") == 300
+
+
+def test_deep_research_uses_one_tool_free_structured_request(
+    tmp_path, monkeypatch
+):
+    captured = {}
+
+    class FakeModel:
+        async def generate_content_async(self, request):
+            captured["request"] = request
+            yield SimpleNamespace(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=(
+                                '{"questions_investigated": [], '
+                                '"revised_assessment": null, '
+                                '"unresolved": ["insufficient evidence"]}'
+                            )
+                        )
+                    ],
+                )
+            )
+
+    monkeypatch.setattr(
+        "tenant_sec_agentic.pipeline._metered_model",
+        lambda *_args, **_kwargs: FakeModel(),
+    )
+    config = _config(tmp_path)
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(
+            state={
+                "doc_fetch_output": {"docs_fetched": []},
+                "skeptic_output": {},
+                "consistency_output": {},
+            }
+        )
+    )
+
+    asyncio.run(
+        AssessmentPipeline._run_deep_research(
+            SimpleNamespace(),
+            ctx,
+            config,
+            {"id": "enc.cmk"},
+        )
+    )
+
+    request = captured["request"]
+    assert request.config.tools is None
+    assert request.config.automatic_function_calling is None
+    assert request.config.response_schema is DeepResearchStructured
+    assert ctx.session.state["deep_research_output"]["unresolved"] == [
+        "insufficient evidence"
+    ]
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
