@@ -607,6 +607,9 @@ class AssessmentPipeline(BaseAgent):
                 max_output_tokens=cfg.limits.max_output_tokens_per_call,
                 response_mime_type="application/json",
                 response_schema=DeepResearchStructured,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True,
+                ),
             ),
         )
         responses = [
