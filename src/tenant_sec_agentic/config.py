@@ -51,6 +51,7 @@ class PathsConfig:
 class SessionConfig:
     database_path: Path
     resume_existing: bool = True
+    resume_artifacts: bool = False
 
 
 @dataclass
@@ -176,6 +177,7 @@ def load_assessment_config(path: Path) -> AssessmentConfig:
     session = SessionConfig(
         database_path=(base / str(sess.get("database_path", "./pipeline_sessions.db"))).resolve(),
         resume_existing=bool(sess.get("resume_existing", True)),
+        resume_artifacts=bool(sess.get("resume_artifacts", False)),
     )
 
     traffic_class = str(raw.get("vertex_traffic_class", "standard"))
@@ -225,6 +227,7 @@ def config_to_serializable(cfg: AssessmentConfig) -> dict[str, Any]:
         "session": {
             "database_path": str(cfg.session.database_path),
             "resume_existing": cfg.session.resume_existing,
+            "resume_artifacts": cfg.session.resume_artifacts,
         },
         "pricing": cfg.pricing,
         "vertex_traffic_class": cfg.vertex_traffic_class,
@@ -257,6 +260,7 @@ def config_from_state(data: dict[str, Any]) -> AssessmentConfig:
         session=SessionConfig(
             database_path=Path(sess["database_path"]),
             resume_existing=bool(sess["resume_existing"]),
+            resume_artifacts=bool(sess.get("resume_artifacts", False)),
         ),
         pricing={
             str(model): dict(price)

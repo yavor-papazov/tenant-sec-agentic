@@ -26,6 +26,8 @@ Copy `assessment-config.example.yaml` to `assessment-config.yaml` (gitignored), 
 
 - `mock_mode: true` — no LLM or search calls; exercises YAML/HTML and SQLite session end-to-end.
 - `session.resume_existing: true` — reuses session id `{slug}-assessment` in the SQLite DB.
+- `session.resume_artifacts: true` — after a failed run, reuses matching
+  completed retrieval and assessor stages instead of paying to repeat them.
 - `limits` are hard stops for calls, tokens, retries, searches, fetches, and
   projected model cost. The pilot requires `max_parallel_assessments: 1`.
 - The live pilot uses Vertex Gemini 3.5 Flash for every role. Live endpoint

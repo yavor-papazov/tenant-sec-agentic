@@ -73,6 +73,7 @@ paths:
 session:
   database_path: "./pipeline_sessions.db"
   resume_existing: true
+  resume_artifacts: true
 
 # Dry-run without calling LLMs or search APIs (uses mock agent outputs).
 mock_mode: false

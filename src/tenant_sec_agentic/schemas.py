@@ -19,13 +19,16 @@ AssessmentStatus = Literal[
 class DocFetchedItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: str = ""
-    title: str = ""
+    url: str = Field(default="", max_length=2048)
+    title: str = Field(default="", max_length=240)
     relevance: Literal["high", "medium", "low"] = "medium"
 
 
 class DocFetchStructured(BaseModel):
-    docs_fetched: list[DocFetchedItem] = Field(default_factory=list)
+    docs_fetched: list[DocFetchedItem] = Field(
+        default_factory=list,
+        max_length=3,
+    )
     services_with_docs: list[str] = Field(default_factory=list)
     services_without_docs: list[str] = Field(default_factory=list)
     doc_quality: Literal["comprehensive", "adequate", "thin", "absent", "error"] = "absent"
@@ -33,7 +36,11 @@ class DocFetchStructured(BaseModel):
 
 class ServiceScore(BaseModel):
     status: AssessmentStatus = "unknown"
-    score: int | None = Field(default=None, ge=0, le=3)
+    score: int | None = Field(
+        ge=0,
+        le=3,
+        description="Required: 0-3 when assessed, otherwise null",
+    )
     evidence: str = ""
     confidence: Literal["high", "medium", "low"] = "low"
     sources_used: list[str] = Field(default_factory=list)

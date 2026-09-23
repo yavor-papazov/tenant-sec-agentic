@@ -205,10 +205,24 @@ class AssessmentPipeline(BaseAgent):
                         consistency_out = None
                         st.pop("consistency_output", None)
                 else:
-                    await self._run_doc_fetch(ctx, cfg, methodology_text, control_def)
-                    doc_fetch_out = st.get("doc_fetch_output") or {}
-                    await self._run_assessor(ctx, cfg, methodology_text, control_def)
-                    assessor_out = st.get("assessor_output") or {}
+                    checkpoint = _load_stage_checkpoint(cfg, cid, hashes)
+                    if checkpoint is not None:
+                        doc_fetch_out, assessor_out = checkpoint
+                        st["doc_fetch_output"] = doc_fetch_out
+                        st["assessor_output"] = assessor_out
+                        logger.info(
+                            "resuming %s from doc-fetch/assessor checkpoint",
+                            cid,
+                        )
+                    else:
+                        await self._run_doc_fetch(
+                            ctx, cfg, methodology_text, control_def
+                        )
+                        doc_fetch_out = st.get("doc_fetch_output") or {}
+                        await self._run_assessor(
+                            ctx, cfg, methodology_text, control_def
+                        )
+                        assessor_out = st.get("assessor_output") or {}
 
                     skip_skeptic = (
                         assessor_out.get("status") == "unknown"
@@ -609,6 +623,44 @@ def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) ->
         f"SERVICE_SCOPED: {control_def.get('service_scoped', False)}\n"
         f"DESCRIPTION:\n{control_def.get('description','')}\n"
     )
+
+
+def _load_stage_checkpoint(
+    cfg: AssessmentConfig,
+    control_id: str,
+    hashes: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Recover completed core stages from a matching failed artifact."""
+    if not cfg.session.resume_artifacts:
+        return None
+    path = (
+        cfg.paths.assessments_dir
+        / cfg.provider.slug
+        / f"{control_id}.yaml"
+    )
+    if not path.is_file():
+        return None
+    try:
+        artifact = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(artifact, dict) or artifact.get("status") != "error":
+        return None
+    if artifact.get("assessment_id") != cfg.provider.assessment_id:
+        return None
+    saved_hashes = artifact.get("prompt_hashes") or {}
+    if any(
+        saved_hashes.get(stage) != hashes.get(stage)
+        for stage in ("doc_fetch", "assessor")
+    ):
+        return None
+    docs = artifact.get("doc_fetch")
+    assessor = artifact.get("assessor")
+    if not isinstance(docs, dict) or not isinstance(assessor, dict):
+        return None
+    if not docs.get("docs_fetched") or not assessor.get("status"):
+        return None
+    return docs, assessor
 
 
 def _should_deep_research(

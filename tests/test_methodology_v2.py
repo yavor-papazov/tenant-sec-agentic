@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from google.adk.models.lite_llm import LiteLlm
 from pydantic import ValidationError
 
@@ -22,6 +23,7 @@ from tenant_sec_agentic.config import (
 from tenant_sec_agentic.pipeline import (
     _drain_agent,
     _final_recommendation,
+    _load_stage_checkpoint,
     _mock_assessor,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
@@ -91,6 +93,7 @@ def test_example_uses_vertex_hybrid_models():
     )
     assert restored.limits.max_search_calls_per_doc_fetch == 2
     assert restored.limits.max_fetch_calls_per_doc_fetch == 3
+    assert restored.session.resume_artifacts is True
 
 
 def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):
@@ -232,6 +235,38 @@ def test_direct_child_agent_events_are_persisted():
 
     asyncio.run(_drain_agent(FakeAgent(), context))
     assert context.session.events == [marker]
+
+
+def test_failed_artifact_resumes_completed_core_stages(tmp_path):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    artifact = {
+        "status": "error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {"doc_fetch": "docs", "assessor": "assessor"},
+        "doc_fetch": {
+            "docs_fetched": [{"url": "https://example.com/docs"}],
+            "doc_quality": "adequate",
+        },
+        "assessor": {
+            "status": "assessed",
+            "score": 2,
+            "evidence": "Supported by official documentation.",
+        },
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_stage_checkpoint(
+        config,
+        "enc.cmk",
+        {"doc_fetch": "docs", "assessor": "assessor"},
+    )
+    assert checkpoint is not None
+    assert checkpoint[1]["score"] == 2
 
 
 def test_approved_unknown_survives_aggregation_without_score():
