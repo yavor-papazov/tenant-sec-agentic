@@ -93,6 +93,22 @@ async def _drain_agent(agent: LlmAgent, ctx: InvocationContext) -> None:
         )
 
 
+def _is_definitive_auth_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return (
+        "reauthentication is needed" in message
+        or "invalid_grant" in message
+        or "application default credentials are not available" in message
+    )
+
+
+def _retry_base_delay(error: BaseException, attempt: int) -> float:
+    message = str(error).lower()
+    if "resource_exhausted" in message or "429" in message:
+        return min(120.0, 30.0 * float(2**attempt))
+    return min(60.0, float(2**attempt))
+
+
 async def _with_retries_drain(
     agent: LlmAgent,
     ctx: InvocationContext,
@@ -109,11 +125,13 @@ async def _with_retries_drain(
         except Exception as e:
             if isinstance(e, BudgetExceeded):
                 raise
+            if _is_definitive_auth_error(e):
+                raise
             last = e
             if i + 1 >= attempts:
                 break
             consume_retry(ctx.session.state, cfg, role, control_id)
-            base_delay = min(60.0, float(2**i))
+            base_delay = _retry_base_delay(e, i)
             await asyncio.sleep(base_delay + random.uniform(0.0, 1.0))
             logger.warning("LLM/API retry %s after error: %s", i + 1, e)
     assert last is not None
@@ -865,8 +883,14 @@ def _final_recommendation(
     if skeptic and skeptic.get("verdict") == "downgrade":
         status = str(skeptic.get("recommended_status") or "unknown")
         score = skeptic.get("recommended_score")
+        recommended_services = skeptic.get("recommended_services") or {}
+        if assessor.get("score") == "mixed" and recommended_services:
+            # A challenger may lower every evidenced service while still
+            # returning a scalar overall score. Preserve service variation
+            # instead of collapsing a service-scoped assessment to one leaf.
+            score = "mixed"
         services = (
-            skeptic.get("recommended_services")
+            recommended_services
             if score == "mixed"
             else None
         )

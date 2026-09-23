@@ -27,18 +27,18 @@ controls:
   scope: all
 
 models:
-  doc_fetch: vertex_ai/gemini-2.5-flash
-  assessor: vertex_ai/gemini-2.5-flash
-  skeptic: vertex_ai/gemini-2.5-flash
-  consistency: vertex_ai/gemini-2.5-flash
-  deep_research: vertex_ai/gemini-2.5-flash
+  doc_fetch: vertex_ai/gemini-3.5-flash
+  assessor: vertex_ai/gemini-3.5-flash
+  skeptic: vertex_ai/gemini-3.5-flash
+  consistency: vertex_ai/gemini-3.5-flash
+  deep_research: vertex_ai/gemini-3.5-flash
 
-vertex_traffic_class: standard
+vertex_traffic_class: priority
 
 pricing:
-  vertex_ai/gemini-2.5-flash:
-    input_per_million: 0.54
-    output_per_million: 4.50
+  vertex_ai/gemini-3.5-flash:
+    input_per_million: 2.70
+    output_per_million: 16.20
 
 limits:
   max_model_calls_per_run: 50

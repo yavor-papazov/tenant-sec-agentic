@@ -25,10 +25,12 @@ from tenant_sec_agentic.pipeline import (
     _drain_agent,
     _enrich_claim_bundle,
     _final_recommendation,
+    _is_definitive_auth_error,
     _load_stage_checkpoint,
     _mock_assessor,
     _normalize_fetched_documents,
     _normalize_service_evidence,
+    _retry_base_delay,
     prompt_hashes,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry, provisional_entry
@@ -203,6 +205,76 @@ def test_challenger_downgrade_preserves_claim_traceability():
         "https://example.com/docs/limits",
     ]
     assert final["criteria_results"][2]["met"] is False
+
+
+def test_challenger_downgrade_preserves_mixed_service_scope():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "object-storage": {
+                "status": "assessed",
+                "score": 2,
+                "evidence": "SSE-C is documented.",
+                "confidence": "high",
+                "sources_used": ["https://example.com/object-storage"],
+            },
+            "block-storage": {
+                "status": "unknown",
+                "evidence": "No decisive documentation.",
+                "confidence": "low",
+                "sources_used": [],
+            },
+        },
+        "evidence": "Capabilities vary by service.",
+        "confidence": "high",
+        "sources_used": ["https://example.com/object-storage"],
+        **_claims(),
+    }
+    skeptic = {
+        "verdict": "downgrade",
+        "recommended_status": "assessed",
+        "recommended_score": 0,
+        "recommended_services": {
+            "object-storage": {
+                "status": "assessed",
+                "score": 0,
+                "evidence": "SSE-C is not a provider KMS integration.",
+                "confidence": "high",
+                "sources_used": ["https://example.com/object-storage"],
+            },
+            "block-storage": {
+                "status": "unknown",
+                "evidence": "No decisive documentation.",
+                "confidence": "low",
+                "sources_used": [],
+            },
+        },
+        "reasoning": "The evidenced service does not meet the CMK definition.",
+    }
+    status, score, services, _, final = _final_recommendation(
+        assessor,
+        skeptic,
+        None,
+    )
+    assert status == "assessed"
+    assert score == "mixed"
+    assert services is not None
+    assert services["object-storage"]["score"] == 0
+    assert services["block-storage"]["status"] == "unknown"
+    assert final["score"] == "mixed"
+
+
+def test_retry_policy_waits_for_capacity_and_fails_fast_on_auth():
+    capacity = RuntimeError("429 RESOURCE_EXHAUSTED")
+    assert _retry_base_delay(capacity, 0) == 30.0
+    assert _retry_base_delay(capacity, 1) == 60.0
+    assert _retry_base_delay(capacity, 2) == 120.0
+    assert _retry_base_delay(RuntimeError("temporary 500"), 2) == 4.0
+    assert _is_definitive_auth_error(
+        RuntimeError("Reauthentication is needed")
+    )
+    assert not _is_definitive_auth_error(capacity)
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
