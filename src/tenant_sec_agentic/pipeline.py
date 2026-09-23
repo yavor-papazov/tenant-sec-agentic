@@ -83,11 +83,12 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
-def _doc_fetch_generation_config(
+def _adk_generation_config(
     cfg: AssessmentConfig,
 ) -> types.GenerateContentConfig:
-    # ADK owns the function-call loop. Disabling the GenAI SDK's second AFC
-    # loop prevents duplicate remote calls and deadline stalls.
+    # ADK owns function-call orchestration and conversation branching.
+    # Disabling the GenAI SDK's second AFC loop prevents inherited tool
+    # history from causing duplicate remote calls and deadline stalls.
     return types.GenerateContentConfig(
         max_output_tokens=cfg.limits.max_output_tokens_per_call,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(
@@ -472,7 +473,7 @@ class AssessmentPipeline(BaseAgent):
             output_schema=DocFetchStructured,
             output_key="doc_fetch_output",
             include_contents="default",
-            generate_content_config=_doc_fetch_generation_config(cfg),
+            generate_content_config=_adk_generation_config(cfg),
         )
         user_text = _user_block_doc_fetch(cfg, control_def)
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "doc_fetch")
@@ -501,9 +502,7 @@ class AssessmentPipeline(BaseAgent):
             output_schema=AssessorStructured,
             output_key="assessor_output",
             include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
+            generate_content_config=_adk_generation_config(cfg),
         )
         docs = ctx.session.state.get("doc_fetch_output") or {}
         user_text = (
@@ -537,9 +536,7 @@ class AssessmentPipeline(BaseAgent):
             output_schema=SkepticStructured,
             output_key="skeptic_output",
             include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
+            generate_content_config=_adk_generation_config(cfg),
         )
         docs = ctx.session.state.get("doc_fetch_output") or {}
         user_text = (
@@ -577,9 +574,7 @@ class AssessmentPipeline(BaseAgent):
             output_schema=ConsistencyStructured,
             output_key="consistency_output",
             include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
+            generate_content_config=_adk_generation_config(cfg),
         )
         user_text = (
             f"CONTROL: {cid}\nPEER SCORES JSON:\n"

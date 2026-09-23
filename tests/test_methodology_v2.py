@@ -24,8 +24,8 @@ from tenant_sec_agentic.config import (
 )
 from tenant_sec_agentic.pipeline import (
     AssessmentPipeline,
+    _adk_generation_config,
     _canonical_evidence_url,
-    _doc_fetch_generation_config,
     _drain_agent,
     _enrich_claim_bundle,
     _final_recommendation,
@@ -295,8 +295,8 @@ def test_optional_deep_research_is_time_and_retry_bounded(tmp_path):
     assert _retry_attempts(config, "assessor") == 3
     assert model_timeout_seconds(config, "deep_research") == 120
     assert model_timeout_seconds(config, "assessor") == 300
-    doc_config = _doc_fetch_generation_config(config)
-    assert doc_config.automatic_function_calling.disable is True
+    adk_config = _adk_generation_config(config)
+    assert adk_config.automatic_function_calling.disable is True
 
 
 def test_deep_research_uses_one_tool_free_structured_request(
