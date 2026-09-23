@@ -1,0 +1,74 @@
+provider:
+  slug: scaleway
+  display_name: Scaleway
+  docs_base_url: https://www.scaleway.com/en/docs
+  assessment_id: scaleway/public/fr-par/standard
+  offering:
+    id: public
+    name: Scaleway Public Cloud
+    partition: commercial
+    regions: [fr-par]
+    edition: standard
+    cohort: eu-public
+  services_in_scope:
+    - { id: instances, name: Instances, category: compute.vm, regions: [fr-par], edition: standard }
+    - { id: kapsule, name: Kubernetes Kapsule, category: compute.containers, regions: [fr-par], edition: standard }
+    - { id: functions, name: Serverless Functions, category: compute.serverless, regions: [fr-par], edition: standard }
+    - { id: containers, name: Serverless Containers, category: compute.serverless, regions: [fr-par], edition: standard }
+    - { id: object-storage, name: Object Storage, category: storage.object, regions: [fr-par], edition: standard }
+    - { id: block-storage, name: Block Storage, category: storage.block, regions: [fr-par], edition: standard }
+    - { id: rdb, name: Managed Databases, category: database.relational, regions: [fr-par], edition: standard }
+    - { id: document-db, name: Document DB, category: database.nosql, regions: [fr-par], edition: standard }
+    - { id: vpc, name: VPC, category: network.vpc, regions: [fr-par], edition: standard }
+    - { id: load-balancer, name: Load Balancer, category: network.loadbalancer, regions: [fr-par], edition: standard }
+    - { id: dns, name: DNS, category: network.dns, regions: [fr-par], edition: standard }
+    - { id: secret-manager, name: Secret Manager, category: security.secrets, regions: [fr-par], edition: standard }
+    - { id: iam, name: IAM, category: identity.iam, regions: [fr-par], edition: standard }
+
+controls:
+  scope: all
+
+models:
+  doc_fetch: vertex_ai/gemini-3.5-flash
+  assessor: vertex_ai/gemini-3.5-flash
+  skeptic: vertex_ai/gemini-3.5-flash
+  consistency: vertex_ai/gemini-3.5-flash
+  deep_research: vertex_ai/gemini-3.5-flash
+
+vertex_traffic_class: priority
+
+pricing:
+  vertex_ai/gemini-3.5-flash:
+    input_per_million: 2.70
+    output_per_million: 16.20
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 8192
+  model_timeout_seconds: 120
+  max_model_turns_per_agent: 8
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.scaleway.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false

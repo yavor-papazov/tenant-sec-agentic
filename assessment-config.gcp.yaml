@@ -1,0 +1,77 @@
+provider:
+  slug: gcp
+  display_name: Google Cloud Platform
+  docs_base_url: https://cloud.google.com/docs
+  assessment_id: gcp/public/europe-west1/standard
+  offering:
+    id: public
+    name: Google Cloud Public Cloud
+    partition: commercial
+    regions: [europe-west1]
+    edition: standard
+    cohort: hyperscaler
+  services_in_scope:
+    - { id: compute-engine, name: Compute Engine, category: compute.vm, regions: [europe-west1], edition: standard }
+    - { id: gke, name: Google Kubernetes Engine, category: compute.containers, regions: [europe-west1], edition: standard }
+    - { id: cloud-functions, name: Cloud Functions, category: compute.serverless, regions: [europe-west1], edition: standard }
+    - { id: cloud-run, name: Cloud Run, category: compute.serverless, regions: [europe-west1], edition: standard }
+    - { id: cloud-storage, name: Cloud Storage, category: storage.object, regions: [europe-west1], edition: standard }
+    - { id: persistent-disk, name: Persistent Disk, category: storage.block, regions: [europe-west1], edition: standard }
+    - { id: cloud-sql, name: Cloud SQL, category: database.relational, regions: [europe-west1], edition: standard }
+    - { id: firestore, name: Firestore, category: database.nosql, regions: [europe-west1], edition: standard }
+    - { id: bigquery, name: BigQuery, category: database.warehouse, regions: [europe-west1], edition: standard }
+    - { id: vpc, name: VPC, category: network.vpc, regions: [europe-west1], edition: standard }
+    - { id: cloud-load-balancing, name: Cloud Load Balancing, category: network.loadbalancer, regions: [europe-west1], edition: standard }
+    - { id: cloud-dns, name: Cloud DNS, category: network.dns, regions: [europe-west1], edition: standard }
+    - { id: cloud-kms, name: Cloud KMS, category: security.kms, regions: [europe-west1], edition: standard }
+    - { id: secret-manager, name: Secret Manager, category: security.secrets, regions: [europe-west1], edition: standard }
+    - { id: cloud-armor, name: Cloud Armor, category: security.waf, regions: [europe-west1], edition: standard }
+    - { id: iam, name: Cloud IAM, category: identity.iam, regions: [europe-west1], edition: standard }
+
+controls:
+  scope: all
+
+models:
+  doc_fetch: vertex_ai/gemini-3.5-flash
+  assessor: vertex_ai/gemini-3.5-flash
+  skeptic: vertex_ai/gemini-3.5-flash
+  consistency: vertex_ai/gemini-3.5-flash
+  deep_research: vertex_ai/gemini-3.5-flash
+
+vertex_traffic_class: priority
+
+pricing:
+  vertex_ai/gemini-3.5-flash:
+    input_per_million: 2.70
+    output_per_million: 16.20
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 8192
+  model_timeout_seconds: 120
+  max_model_turns_per_agent: 8
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.gcp.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false

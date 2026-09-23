@@ -95,22 +95,23 @@ def main(argv: list[str] | None = None) -> None:
 
     assessments = load_assessments(prov_folder)
     controls: dict = {}
-    pending = 0
+    unapproved: list[str] = []
     for a in assessments:
         cid = a.get("control")
         if not cid:
             continue
         rev = (a.get("review") or {}).get("status")
-        if rev == "pending":
-            pending += 1
         ok, entry = approved_entry(a)
         if ok and entry:
             controls[cid] = entry
+        else:
+            unapproved.append(str(cid))
 
-    if pending and not args.allow_partial:
+    if unapproved and not args.allow_partial:
         sys.exit(
-            f"Refusing to write profile: {pending} assessment(s) still have "
-            f"review.status=pending. Approve in YAML or pass --allow-partial."
+            f"Refusing to write profile: {len(unapproved)} assessment(s) "
+            "are not approved or adjusted. Complete human review or pass "
+            "--allow-partial."
         )
 
     schema_path = repo / "schema" / "provider.schema.json"
@@ -136,6 +137,17 @@ def main(argv: list[str] | None = None) -> None:
     offering = first.get("offering")
     if not services or not assessment_id or not offering:
         sys.exit("Assessments are missing strict v2 identity/scope metadata")
+    identity_errors = [
+        str(a.get("control") or "unknown")
+        for a in assessments
+        if a.get("assessment_id") != assessment_id
+        or a.get("offering") != offering
+        or a.get("services_in_scope") != services
+    ]
+    if identity_errors:
+        sys.exit(
+            "Assessment identity/scope mismatch: " + ", ".join(identity_errors)
+        )
 
     profile = {
         "provider": slug,
@@ -149,6 +161,9 @@ def main(argv: list[str] | None = None) -> None:
         "services_in_scope": services,
         "controls": controls,
     }
+    for field in ("vignette", "certifications", "service_scope_exceptions"):
+        if field in base:
+            profile[field] = base[field]
 
     v = Draft202012Validator(schema, format_checker=FormatChecker())
     errs = [e.message for e in v.iter_errors(profile)]

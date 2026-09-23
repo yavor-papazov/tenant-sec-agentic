@@ -92,7 +92,11 @@ def resolve_control_scope(
     scope: str | list[str], controls: dict[str, dict[str, Any]]
 ) -> list[str]:
     if scope == "all":
-        return sorted(controls.keys())
+        return sorted(
+            control_id
+            for control_id, control in controls.items()
+            if str(control.get("surface") or "tenant") == "tenant"
+        )
     missing = [c for c in scope if c not in controls]
     if missing:
         raise ValueError(

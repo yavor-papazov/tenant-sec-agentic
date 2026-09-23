@@ -8,6 +8,14 @@ def test_resolve_scope_all_keys_exist():
     assert set(resolve_control_scope("all", controls)) == {"a.b", "c.d"}
 
 
+def test_resolve_scope_all_excludes_vignette_controls():
+    controls = {
+        "a.b": {"surface": "tenant"},
+        "c.d": {"surface": "vignette"},
+    }
+    assert resolve_control_scope("all", controls) == ["a.b"]
+
+
 def test_resolve_scope_unknown():
     controls = {"a.b": {}}
     with pytest.raises(ValueError):

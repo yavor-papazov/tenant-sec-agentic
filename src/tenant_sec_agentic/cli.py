@@ -36,10 +36,35 @@ def main(argv: list[str] | None = None) -> None:
         default=0,
         help="Process at most N controls (0 = all)",
     )
+    p.add_argument(
+        "--controls",
+        nargs="+",
+        default=None,
+        help="Run only these exact control IDs",
+    )
+    p.add_argument(
+        "--session-database",
+        type=Path,
+        default=None,
+        help="Override the configured session database path",
+    )
     args = p.parse_args(argv)
 
     cfg = load_assessment_config(args.config.resolve())
+    if args.session_database is not None:
+        cfg.session.database_path = args.session_database.resolve()
     state = initial_session_state(cfg)
+    if args.controls:
+        available = {
+            str(item["control"]): item
+            for item in state["assessment_queue"]
+        }
+        missing = sorted(set(args.controls) - set(available))
+        if missing:
+            p.error("Unknown or out-of-scope controls: " + ", ".join(missing))
+        state["assessment_queue"] = [
+            available[control_id] for control_id in args.controls
+        ]
     if args.limit > 0:
         q = state["assessment_queue"]
         state["assessment_queue"] = q[: args.limit]

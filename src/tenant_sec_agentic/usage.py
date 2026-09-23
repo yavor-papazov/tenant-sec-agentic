@@ -233,7 +233,13 @@ def write_ledger(state: dict[str, Any], cfg: AssessmentConfig) -> Path:
     ledger["finished_at"] = datetime.now(timezone.utc).isoformat()
     path = cfg.paths.assessments_dir / cfg.provider.slug / "usage-ledger.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ledger, indent=2, sort_keys=True), encoding="utf-8")
+    serialized = json.dumps(ledger, indent=2, sort_keys=True)
+    path.write_text(serialized, encoding="utf-8")
+    control_ids = sorted(ledger.get("by_control", {}))
+    if len(control_ids) == 1:
+        control_path = path.parent / "usage-ledgers" / f"{control_ids[0]}.json"
+        control_path.parent.mkdir(parents=True, exist_ok=True)
+        control_path.write_text(serialized, encoding="utf-8")
     return path
 
 

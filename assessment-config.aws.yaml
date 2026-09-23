@@ -1,0 +1,77 @@
+provider:
+  slug: aws
+  display_name: Amazon Web Services
+  docs_base_url: https://docs.aws.amazon.com
+  assessment_id: aws/public/eu-west-1/standard
+  offering:
+    id: public
+    name: AWS Public Cloud
+    partition: aws
+    regions: [eu-west-1]
+    edition: standard
+    cohort: hyperscaler
+  services_in_scope:
+    - { id: ec2, name: EC2, category: compute.vm, regions: [eu-west-1], edition: standard }
+    - { id: eks, name: Elastic Kubernetes Service, category: compute.containers, regions: [eu-west-1], edition: standard }
+    - { id: ecs, name: Elastic Container Service, category: compute.containers, regions: [eu-west-1], edition: standard }
+    - { id: lambda, name: Lambda, category: compute.serverless, regions: [eu-west-1], edition: standard }
+    - { id: s3, name: S3, category: storage.object, regions: [eu-west-1], edition: standard }
+    - { id: ebs, name: EBS, category: storage.block, regions: [eu-west-1], edition: standard }
+    - { id: rds, name: RDS, category: database.relational, regions: [eu-west-1], edition: standard }
+    - { id: dynamodb, name: DynamoDB, category: database.nosql, regions: [eu-west-1], edition: standard }
+    - { id: elasticache, name: ElastiCache, category: database.cache, regions: [eu-west-1], edition: standard }
+    - { id: vpc, name: VPC, category: network.vpc, regions: [eu-west-1], edition: standard }
+    - { id: alb, name: Application Load Balancer, category: network.loadbalancer, regions: [eu-west-1], edition: standard }
+    - { id: route53, name: Route 53, category: network.dns, regions: [eu-west-1], edition: standard }
+    - { id: kms, name: Key Management Service, category: security.kms, regions: [eu-west-1], edition: standard }
+    - { id: secrets-manager, name: Secrets Manager, category: security.secrets, regions: [eu-west-1], edition: standard }
+    - { id: waf, name: WAF, category: security.waf, regions: [eu-west-1], edition: standard }
+    - { id: iam, name: IAM, category: identity.iam, regions: [eu-west-1], edition: standard }
+
+controls:
+  scope: all
+
+models:
+  doc_fetch: vertex_ai/gemini-3.5-flash
+  assessor: vertex_ai/gemini-3.5-flash
+  skeptic: vertex_ai/gemini-3.5-flash
+  consistency: vertex_ai/gemini-3.5-flash
+  deep_research: vertex_ai/gemini-3.5-flash
+
+vertex_traffic_class: priority
+
+pricing:
+  vertex_ai/gemini-3.5-flash:
+    input_per_million: 2.70
+    output_per_million: 16.20
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 8192
+  model_timeout_seconds: 120
+  max_model_turns_per_agent: 8
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.aws.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false

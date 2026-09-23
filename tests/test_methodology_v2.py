@@ -26,8 +26,10 @@ from tenant_sec_agentic.pipeline import (
     _final_recommendation,
     _load_stage_checkpoint,
     _mock_assessor,
+    prompt_hashes,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry
+from tenant_sec_agentic.batch_cli import BudgetTracker, artifact_is_current
 from tenant_sec_agentic.metered_model import MeteredLiteLlm
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
@@ -39,6 +41,7 @@ from tenant_sec_agentic.usage import (
     finalize_model_call,
     new_ledger,
     reserve_model_call,
+    write_ledger,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -346,6 +349,99 @@ def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
     item = enriched["evidence_items"][0]
     assert item["content_hash"].startswith("sha256:")
     assert item["applicability"]["offering"] == "public"
+
+
+def test_batch_runner_recognizes_current_review_artifact(tmp_path):
+    config = _config(tmp_path)
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    artifact = {
+        "control": "enc.cmk",
+        "provider": config.provider.slug,
+        "assessment_id": config.provider.assessment_id,
+        "methodology_version": "2.0",
+        "prompt_hashes": prompt_hashes(),
+        "result_status": "assessed",
+        "recommended_score": 2,
+        "status": "needs_human_review",
+        "assessor": _claims(),
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    assert artifact_is_current(config, "enc.cmk") is True
+
+
+def test_batch_budget_reservations_fail_closed(tmp_path):
+    tracker = BudgetTracker(tmp_path / "release-ledger.json", 5.0)
+
+    async def exercise():
+        first = await tracker.reserve(
+            provider="scaleway",
+            control="enc.cmk",
+            attempt=1,
+            amount_usd=4.0,
+        )
+        assert first is not None
+        import asyncio
+
+        waiting = asyncio.create_task(
+            tracker.reserve(
+                provider="aws",
+                control="enc.cmk",
+                attempt=1,
+                amount_usd=4.0,
+            )
+        )
+        await asyncio.sleep(0)
+        assert waiting.done() is False
+        await tracker.finalize(
+            first,
+            status="completed",
+            actual_model_cost_usd=0.5,
+            tavily_max_cost_usd=0.02,
+            exit_code=0,
+            artifact_current=True,
+            log_path=tmp_path / "run.log",
+        )
+        second = await waiting
+        assert second is not None
+        await tracker.finalize(
+            second,
+            status="completed",
+            actual_model_cost_usd=4.4,
+            tavily_max_cost_usd=0.08,
+            exit_code=0,
+            artifact_current=True,
+            log_path=tmp_path / "run-2.log",
+        )
+        blocked = await tracker.reserve(
+            provider="gcp",
+            control="enc.cmk",
+            attempt=1,
+            amount_usd=0.01,
+        )
+        assert blocked is None
+
+    import asyncio
+
+    asyncio.run(exercise())
+    assert tracker.charged_usd == pytest.approx(5.0)
+
+
+def test_single_control_usage_gets_concurrency_safe_ledger(tmp_path):
+    config = _config(tmp_path)
+    state = {"usage_ledger": new_ledger(config)}
+    state["usage_ledger"]["by_control"]["enc.cmk"] = {}
+    write_ledger(state, config)
+    path = (
+        config.paths.assessments_dir
+        / config.provider.slug
+        / "usage-ledgers"
+        / "enc.cmk.json"
+    )
+    assert path.is_file()
 
 
 def test_approved_unknown_survives_aggregation_without_score():
