@@ -23,6 +23,17 @@ RULES:
 5. Every assessed result must list the exact supporting URLs in `sources_used`.
    Per-service results must do the same. Do not cite search snippets as evidence.
 6. Set deep_research_recommended true when confidence is low and name what to verify.
+7. For an assessed result, build the methodology 2.0 claim chain:
+   - `evidence_items`: one entry per decisive source excerpt. Use stable ids
+     `ev-...`, exact URLs, titles, source class, a verbatim quote, and affected
+     service ids. Never invent a quote.
+   - `claims`: atomic assertions with stable `cl-...` ids, result
+     supported/unsupported/contradicted, evidence item ids, and service ids.
+   - `criteria_results`: exactly one result for each numeric level 0, 1, 2,
+     and 3. State whether that criterion is met, why, and the supporting claim
+     ids. The recommended score must follow these results.
+   Evidence-item and claim ids may contain only lowercase letters, digits, and
+   hyphens after their prefix.
 
 Output must match the required JSON schema. `status: assessed` requires score
 0–3 or mixed; every other status must set score to null. Always include

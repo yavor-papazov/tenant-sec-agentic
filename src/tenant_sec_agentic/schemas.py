@@ -54,6 +54,37 @@ class ServiceScore(BaseModel):
         return self
 
 
+class AssessorEvidenceItem(BaseModel):
+    id: str = Field(pattern=r"^ev-[a-z0-9-]+$")
+    url: str
+    title: str = Field(max_length=160)
+    source_class: Literal[
+        "regulator",
+        "binding",
+        "api",
+        "technical",
+        "support",
+        "secondary",
+    ]
+    quote: str = Field(min_length=1, max_length=1200)
+    services: list[str] = Field(default_factory=list)
+
+
+class AssessmentClaim(BaseModel):
+    id: str = Field(pattern=r"^cl-[a-z0-9-]+$")
+    assertion: str = Field(min_length=1, max_length=500)
+    result: Literal["supported", "unsupported", "contradicted"]
+    evidence_item_ids: list[str] = Field(min_length=1)
+    services: list[str] = Field(default_factory=list)
+
+
+class CriterionResult(BaseModel):
+    level: int = Field(ge=0, le=3)
+    met: bool
+    reasoning: str = Field(min_length=1, max_length=800)
+    claim_ids: list[str] = Field(default_factory=list)
+
+
 class AssessorStructured(BaseModel):
     status: AssessmentStatus
     score: int | Literal["mixed"] | None = Field(
@@ -68,6 +99,9 @@ class AssessorStructured(BaseModel):
     flags: list[str] = Field(default_factory=list)
     deep_research_recommended: bool = False
     sources_used: list[str] = Field(default_factory=list)
+    evidence_items: list[AssessorEvidenceItem] = Field(default_factory=list)
+    claims: list[AssessmentClaim] = Field(default_factory=list)
+    criteria_results: list[CriterionResult] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def score_matches_status(self) -> "AssessorStructured":
@@ -77,6 +111,32 @@ class AssessorStructured(BaseModel):
             raise ValueError("non-assessed result prohibits score")
         if self.score == "mixed" and not self.services:
             raise ValueError("mixed result requires services")
+        if self.status == "assessed":
+            if not self.evidence_items or not self.claims:
+                raise ValueError(
+                    "assessed result requires evidence_items and claims"
+                )
+            if {result.level for result in self.criteria_results} != {
+                0,
+                1,
+                2,
+                3,
+            }:
+                raise ValueError(
+                    "assessed result requires criteria results for L0-L3"
+                )
+            evidence_ids = {item.id for item in self.evidence_items}
+            for claim in self.claims:
+                if set(claim.evidence_item_ids) - evidence_ids:
+                    raise ValueError(
+                        f"claim {claim.id} references unknown evidence"
+                    )
+            claim_ids = {claim.id for claim in self.claims}
+            for result in self.criteria_results:
+                if set(result.claim_ids) - claim_ids:
+                    raise ValueError(
+                        f"L{result.level} references unknown claims"
+                    )
         return self
 
 

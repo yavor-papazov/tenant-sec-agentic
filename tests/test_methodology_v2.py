@@ -22,6 +22,7 @@ from tenant_sec_agentic.config import (
 )
 from tenant_sec_agentic.pipeline import (
     _drain_agent,
+    _enrich_claim_bundle,
     _final_recommendation,
     _load_stage_checkpoint,
     _mock_assessor,
@@ -42,6 +43,46 @@ from tenant_sec_agentic.usage import (
 
 ROOT = Path(__file__).parent.parent
 CANONICAL = ROOT.parent / "tenant-sec"
+
+
+def _claims() -> dict:
+    return {
+        "evidence_items": [
+            {
+                "id": "ev-official-doc",
+                "url": "https://example.com/docs/cmk",
+                "title": "CMK documentation",
+                "source_class": "technical",
+                "retrieved_at": "2026-09-23T00:00:00+00:00",
+                "content_hash": "sha256:" + "a" * 64,
+                "quote": "API accepts a customer key identifier.",
+                "applicability": {
+                    "offering": "public",
+                    "regions": ["fr-par"],
+                    "services": ["object-storage"],
+                    "edition": "standard",
+                },
+            }
+        ],
+        "claims": [
+            {
+                "id": "cl-cmk-supported",
+                "assertion": "The API accepts a customer key identifier.",
+                "result": "supported",
+                "evidence_item_ids": ["ev-official-doc"],
+                "services": ["object-storage"],
+            }
+        ],
+        "criteria_results": [
+            {
+                "level": level,
+                "met": level == 2,
+                "reasoning": f"L{level} evaluated against the claim.",
+                "claim_ids": ["cl-cmk-supported"],
+            }
+            for level in range(4)
+        ],
+    }
 
 
 def _config(tmp_path: Path) -> AssessmentConfig:
@@ -128,6 +169,7 @@ def test_canonical_entry_retains_sources_and_validates(tmp_path):
         "evidence": "API accepts a customer key identifier.",
         "confidence": "high",
         "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
     }
     entry = control_entry_for_provider_schema(
         "assessed", 2, assessor, None, "high"
@@ -263,6 +305,7 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
             "status": "assessed",
             "score": 2,
             "evidence": "Supported by official documentation.",
+            **_claims(),
         },
     }
     (artifact_dir / "enc.cmk.yaml").write_text(
@@ -276,6 +319,33 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
     )
     assert checkpoint is not None
     assert checkpoint[1]["score"] == 2
+
+
+def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
+    config = _config(tmp_path)
+    assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Supported.",
+        **_claims(),
+    }
+    raw = assessor["evidence_items"][0]
+    raw.pop("retrieved_at")
+    raw.pop("content_hash")
+    raw.pop("applicability")
+    raw["services"] = ["object-storage"]
+    enriched = _enrich_claim_bundle(
+        assessor,
+        config,
+        {
+            "https://example.com/docs/cmk": {
+                "content": "API accepts a customer key identifier."
+            }
+        },
+    )
+    item = enriched["evidence_items"][0]
+    assert item["content_hash"].startswith("sha256:")
+    assert item["applicability"]["offering"] == "public"
 
 
 def test_approved_unknown_survives_aggregation_without_score():

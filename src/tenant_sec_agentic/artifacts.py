@@ -108,6 +108,17 @@ def validate_internal_assessment(data: dict[str, Any]) -> list[str]:
         rs = data.get("recommended_services")
         if not isinstance(rs, dict) or not rs:
             errs.append("mixed score requires recommended_services map")
+    if result_status == "assessed":
+        assessor = data.get("assessor") or {}
+        if not assessor.get("evidence_items"):
+            errs.append("assessed result requires evidence_items")
+        if not assessor.get("claims"):
+            errs.append("assessed result requires claims")
+        if {
+            value.get("level")
+            for value in assessor.get("criteria_results") or []
+        } != {0, 1, 2, 3}:
+            errs.append("assessed result requires L0-L3 criteria_results")
     return errs
 
 
@@ -179,6 +190,7 @@ def control_entry_for_provider_schema(
             "verified_at": verified,
             "confidence": overall_confidence,
             "references": sources,
+            **_claim_bundle(assessor),
         }
     return {
         "status": "assessed",
@@ -187,6 +199,15 @@ def control_entry_for_provider_schema(
         "verified_at": verified,
         "confidence": overall_confidence,
         "references": sources,
+        **_claim_bundle(assessor),
+    }
+
+
+def _claim_bundle(assessor: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "evidence_items": list(assessor.get("evidence_items") or []),
+        "claims": list(assessor.get("claims") or []),
+        "criteria_results": list(assessor.get("criteria_results") or []),
     }
 
 

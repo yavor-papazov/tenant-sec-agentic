@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import random
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -463,6 +465,14 @@ class AssessmentPipeline(BaseAgent):
             f"{json.dumps(docs, default=str)}```"
         )
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "assessor")
+        output = ctx.session.state.get("assessor_output")
+        if isinstance(output, dict) and output.get("status") == "assessed":
+            fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+            ctx.session.state["assessor_output"] = _enrich_claim_bundle(
+                output,
+                cfg,
+                fetched,
+            )
 
     async def _run_skeptic(
         self,
@@ -566,6 +576,20 @@ class AssessmentPipeline(BaseAgent):
             cfg,
             "deep_research",
         )
+        output = ctx.session.state.get("deep_research_output")
+        revised = (
+            output.get("revised_assessment")
+            if isinstance(output, dict)
+            else None
+        )
+        if isinstance(revised, dict) and revised.get("status") == "assessed":
+            fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+            output["revised_assessment"] = _enrich_claim_bundle(
+                revised,
+                cfg,
+                fetched,
+            )
+            ctx.session.state["deep_research_output"] = output
 
 
 async def _inject_user_and_drain(
@@ -660,7 +684,99 @@ def _load_stage_checkpoint(
         return None
     if not docs.get("docs_fetched") or not assessor.get("status"):
         return None
+    if assessor.get("status") == "assessed" and (
+        not assessor.get("evidence_items")
+        or not assessor.get("claims")
+        or {
+            value.get("level")
+            for value in assessor.get("criteria_results") or []
+        }
+        != {0, 1, 2, 3}
+    ):
+        return None
     return docs, assessor
+
+
+def _enrich_claim_bundle(
+    assessor: dict[str, Any],
+    cfg: AssessmentConfig,
+    fetched_documents: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach immutable source metadata and source-backed quotes."""
+    enriched = dict(assessor)
+    claims = list(enriched.get("claims") or [])
+    assertions_by_evidence: dict[str, list[str]] = {}
+    for claim in claims:
+        for evidence_id in claim.get("evidence_item_ids") or []:
+            assertions_by_evidence.setdefault(str(evidence_id), []).append(
+                str(claim.get("assertion") or "")
+            )
+
+    now = datetime.now(timezone.utc).isoformat()
+    items = []
+    for raw in enriched.get("evidence_items") or []:
+        item = dict(raw)
+        url = str(item.get("url") or "")
+        fetched = fetched_documents.get(url)
+        if not isinstance(fetched, dict) or not fetched.get("content"):
+            raise RuntimeError(
+                f"claim evidence URL was not fetched: {url or '<missing>'}"
+            )
+        content = str(fetched["content"])
+        quote = str(item.get("quote") or "").strip()
+        if (
+            not quote
+            or _normalize_text(quote) not in _normalize_text(content)
+        ):
+            quote = _best_source_excerpt(
+                content,
+                assertions_by_evidence.get(str(item.get("id")), []),
+            )
+        if not quote:
+            raise RuntimeError(f"no source-backed quote available for {url}")
+        item["title"] = str(
+            item.get("title") or fetched.get("title") or url
+        )
+        item["quote"] = quote
+        item["retrieved_at"] = now
+        item["content_hash"] = (
+            "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+        )
+        item["applicability"] = {
+            "offering": str(cfg.provider.offering["id"]),
+            "regions": list(cfg.provider.offering["regions"]),
+            "services": list(item.pop("services", []) or []),
+            "edition": str(cfg.provider.offering["edition"]),
+        }
+        items.append(item)
+    enriched["evidence_items"] = items
+    return enriched
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _best_source_excerpt(content: str, assertions: list[str]) -> str:
+    chunks = [
+        chunk.strip()
+        for chunk in re.split(r"\n{2,}|(?<=[.!?])\s+(?=[A-Z])", content)
+        if len(chunk.strip()) >= 40
+    ]
+    if not chunks:
+        return content.strip()[:800]
+    terms = {
+        token
+        for assertion in assertions
+        for token in re.findall(r"[a-z0-9-]{4,}", assertion.casefold())
+    }
+    best = max(
+        chunks,
+        key=lambda chunk: sum(
+            1 for term in terms if term in chunk.casefold()
+        ),
+    )
+    return best[:1200]
 
 
 def _should_deep_research(
