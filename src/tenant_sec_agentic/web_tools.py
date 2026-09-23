@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 STATE_DEEP_SEARCH_COUNT = "_deep_research_search_count"
 STATE_DEEP_FETCH_COUNT = "_deep_research_fetch_count"
+STATE_DOC_SEARCH_COUNT = "_doc_fetch_search_count"
+STATE_DOC_FETCH_COUNT = "_doc_fetch_fetch_count"
 STATE_FETCHED_DOCUMENTS = "_fetched_documents"
 
 
@@ -48,7 +50,19 @@ def _tavily_search(query: str, api_key: str) -> list[dict[str, str]]:
 def web_search(query: str, tool_context: ToolContext) -> dict[str, Any]:
     """Search the web for documentation. Returns top results as {url, title, snippet}."""
     mode = tool_context.state.get("pipeline_mode", "doc_fetch")
-    if mode == "deep_research":
+    if mode == "doc_fetch":
+        n = int(tool_context.state.get(STATE_DOC_SEARCH_COUNT, 0))
+        lim = int(tool_context.state.get("doc_fetch_max_search", 2))
+        if n >= lim:
+            return {
+                "error": (
+                    "Per-control search budget exhausted. Return the final "
+                    "structured response now; do not call another tool."
+                ),
+                "results": [],
+            }
+        tool_context.state[STATE_DOC_SEARCH_COUNT] = n + 1
+    elif mode == "deep_research":
         n = int(tool_context.state.get(STATE_DEEP_SEARCH_COUNT, 0))
         lim = int(
             tool_context.state.get("deep_research_max_search", 10)
@@ -86,7 +100,21 @@ def web_fetch(
 ) -> dict[str, Any]:
     """Fetch URL and extract readable text (trafilatura)."""
     mode = tool_context.state.get("pipeline_mode", "doc_fetch")
-    if mode == "deep_research":
+    if mode == "doc_fetch":
+        n = int(tool_context.state.get(STATE_DOC_FETCH_COUNT, 0))
+        lim = int(tool_context.state.get("doc_fetch_max_fetch", 3))
+        if n >= lim:
+            return {
+                "url": url,
+                "content": "",
+                "status": "error",
+                "error_detail": (
+                    "Per-control fetch budget exhausted. Return the final "
+                    "structured response now; do not call another tool."
+                ),
+            }
+        tool_context.state[STATE_DOC_FETCH_COUNT] = n + 1
+    elif mode == "deep_research":
         n = int(tool_context.state.get(STATE_DEEP_FETCH_COUNT, 0))
         lim = int(tool_context.state.get("deep_research_max_fetch", 5))
         if n >= lim:

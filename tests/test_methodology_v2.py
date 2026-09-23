@@ -89,6 +89,8 @@ def test_example_uses_vertex_hybrid_models():
         restored.limits.max_model_turns_per_agent
         == config.limits.max_model_turns_per_agent
     )
+    assert restored.limits.max_search_calls_per_doc_fetch == 2
+    assert restored.limits.max_fetch_calls_per_doc_fetch == 3
 
 
 def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):

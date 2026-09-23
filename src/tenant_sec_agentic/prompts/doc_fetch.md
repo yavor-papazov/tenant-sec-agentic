@@ -7,17 +7,24 @@ The session state contains:
 - provider name, docs base URL, services in scope
 - control id, name, description, domain, service_scoped flag
 
+STRICT TOOL BUDGET:
+- The user message already lists every in-scope service. Do not call
+  list_provider_services.
+- Make at most 2 web_search calls and at most 3 web_fetch calls total.
+- Combine related services in each query instead of searching one at a time.
+- Once you have used that budget, immediately return the final structured
+  response. Do not call another tool, even if coverage is incomplete.
+
 INSTRUCTIONS:
-1. Call list_provider_services first if you need the exact service ids.
-2. Search the provider's documentation site for content related to this
+1. Search the provider's documentation site for content related to this
    control. Prefer the docs base URL domain in your queries.
-3. Focus on TECHNICAL documentation: API references, configuration guides,
+2. Focus on TECHNICAL documentation: API references, configuration guides,
    architecture documents, CLI references. NOT marketing pages or press releases.
-4. For controls marked service_scoped in state, search for EACH in-scope service
-   individually when relevant.
-5. Fetch the full content of the most relevant pages (up to 5 pages) using web_fetch.
-6. If you find no relevant documentation after 3 search attempts with different
-   queries, set doc_quality to "absent".
+3. For service-scoped controls, cover all in-scope services in the combined
+   queries when relevant.
+4. Fetch the full content of the most relevant pages (up to 3 pages).
+5. If you find no relevant documentation after 2 different searches, set
+   doc_quality to "absent".
 
 Populate docs_fetched with only url, title, and relevance. The tool runtime
 reattaches fetched content after your structured response; do not repeat full

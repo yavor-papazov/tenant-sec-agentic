@@ -31,6 +31,8 @@ class LimitsConfig:
     max_retries_per_call: int = 2
     max_search_calls_per_run: int = 40
     max_fetch_calls_per_run: int = 30
+    max_search_calls_per_doc_fetch: int = 2
+    max_fetch_calls_per_doc_fetch: int = 3
     max_deep_research_per_run: int = 5
     max_search_calls_per_deep_research: int = 5
     max_fetch_calls_per_deep_research: int = 3
@@ -132,6 +134,12 @@ def load_assessment_config(path: Path) -> AssessmentConfig:
         max_retries_per_call=int(lim.get("max_retries_per_call", 2)),
         max_search_calls_per_run=int(lim.get("max_search_calls_per_run", 40)),
         max_fetch_calls_per_run=int(lim.get("max_fetch_calls_per_run", 30)),
+        max_search_calls_per_doc_fetch=int(
+            lim.get("max_search_calls_per_doc_fetch", 2)
+        ),
+        max_fetch_calls_per_doc_fetch=int(
+            lim.get("max_fetch_calls_per_doc_fetch", 3)
+        ),
         max_deep_research_per_run=int(lim.get("max_deep_research_per_run", 5)),
         max_search_calls_per_deep_research=int(
             lim.get("max_search_calls_per_deep_research", 5)

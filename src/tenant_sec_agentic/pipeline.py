@@ -40,6 +40,8 @@ from tenant_sec_agentic.schemas import (
 from tenant_sec_agentic.web_tools import (
     STATE_DEEP_FETCH_COUNT,
     STATE_DEEP_SEARCH_COUNT,
+    STATE_DOC_FETCH_COUNT,
+    STATE_DOC_SEARCH_COUNT,
     STATE_FETCHED_DOCUMENTS,
     doc_fetch_tools,
 )
@@ -153,7 +155,15 @@ class AssessmentPipeline(BaseAgent):
             st["pipeline_mode"] = "doc_fetch"
             st.pop(STATE_DEEP_SEARCH_COUNT, None)
             st.pop(STATE_DEEP_FETCH_COUNT, None)
+            st.pop(STATE_DOC_SEARCH_COUNT, None)
+            st.pop(STATE_DOC_FETCH_COUNT, None)
             st.pop(STATE_FETCHED_DOCUMENTS, None)
+            st["doc_fetch_max_search"] = (
+                cfg.limits.max_search_calls_per_doc_fetch
+            )
+            st["doc_fetch_max_fetch"] = (
+                cfg.limits.max_fetch_calls_per_doc_fetch
+            )
             for k in (
                 "doc_fetch_output",
                 "assessor_output",
@@ -592,6 +602,7 @@ def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) ->
     return (
         f"PROVIDER: {cfg.provider.display_name} ({cfg.provider.slug})\n"
         f"DOCS_BASE_URL: {cfg.provider.docs_base_url}\n"
+        f"SERVICES_IN_SCOPE: {json.dumps(cfg.provider.services_in_scope)}\n"
         f"CONTROL: {control_def.get('id')}\n"
         f"NAME: {control_def.get('name')}\n"
         f"DOMAIN: {control_def.get('domain')}\n"
