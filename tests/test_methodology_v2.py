@@ -230,8 +230,9 @@ def test_challenger_downgrade_preserves_mixed_service_scope():
                 "sources_used": ["https://example.com/object-storage"],
             },
             "block-storage": {
-                "status": "unknown",
-                "evidence": "No decisive documentation.",
+                "status": "assessed",
+                "score": 0,
+                "evidence": "No docs, so challenger guessed L0.",
                 "confidence": "low",
                 "sources_used": [],
             },
@@ -273,6 +274,45 @@ def test_challenger_downgrade_preserves_mixed_service_scope():
     assert services["object-storage"]["score"] == 0
     assert services["block-storage"]["status"] == "unknown"
     assert final["score"] == "mixed"
+
+
+def test_unresolved_deep_revision_does_not_override_assessor():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "managed-kubernetes-service": {
+                "status": "unknown",
+                "score": None,
+                "evidence": "Managed control-plane support is not documented.",
+                "confidence": "low",
+                "sources_used": [],
+            }
+        },
+        "evidence": "Evidence remains incomplete.",
+        "confidence": "low",
+        "sources_used": [],
+        **_claims(),
+    }
+    deep = {
+        "revised_assessment": {
+            "status": "assessed",
+            "score": 0,
+            "services": {},
+            "confidence": "high",
+        },
+        "unresolved": ["Managed control-plane support remains unresolved."],
+    }
+
+    status, score, services, confidence, final = _final_recommendation(
+        assessor,
+        None,
+        deep,
+    )
+
+    assert (status, score, confidence) == ("assessed", "mixed", "low")
+    assert services["managed-kubernetes-service"]["status"] == "unknown"
+    assert final == assessor
 
 
 def test_retry_policy_waits_for_capacity_and_fails_fast_on_auth():

@@ -953,10 +953,25 @@ def _final_recommendation(
     conf = str(assessor.get("confidence") or "low")
 
     revised = (deep or {}).get("revised_assessment")
-    if isinstance(revised, dict) and revised.get("status"):
+    unresolved = list((deep or {}).get("unresolved") or [])
+    if (
+        isinstance(revised, dict)
+        and revised.get("status")
+        and not unresolved
+    ):
         status = str(revised["status"])
         score = revised.get("score")
-        services = revised.get("services") if score == "mixed" else None
+        services = (
+            _preserve_unknown_service_zeros(
+                assessor.get("services") or {},
+                revised.get("services") or {},
+            )
+            if score == "mixed"
+            else None
+        )
+        if score == "mixed":
+            revised = dict(revised)
+            revised["services"] = services
         return (
             status,
             score,
@@ -968,7 +983,10 @@ def _final_recommendation(
     if skeptic and skeptic.get("verdict") == "downgrade":
         status = str(skeptic.get("recommended_status") or "unknown")
         score = skeptic.get("recommended_score")
-        recommended_services = skeptic.get("recommended_services") or {}
+        recommended_services = _preserve_unknown_service_zeros(
+            assessor.get("services") or {},
+            skeptic.get("recommended_services") or {},
+        )
         if assessor.get("score") == "mixed" and recommended_services:
             # A challenger may lower every evidenced service while still
             # returning a scalar overall score. Preserve service variation
@@ -1019,6 +1037,27 @@ def _final_recommendation(
     score = assessor.get("score")
     services = assessor.get("services") if score == "mixed" else None
     return status, score, services, conf, assessor
+
+
+def _preserve_unknown_service_zeros(
+    original: dict[str, Any],
+    proposed: dict[str, Any],
+) -> dict[str, Any]:
+    """Do not turn missing evidence into an unsupported L0 downgrade."""
+    guarded = {
+        service_id: dict(service)
+        for service_id, service in proposed.items()
+    }
+    for service_id, service in list(guarded.items()):
+        prior = original.get(service_id)
+        if (
+            isinstance(prior, dict)
+            and prior.get("status") != "assessed"
+            and service.get("status") == "assessed"
+            and service.get("score") == 0
+        ):
+            guarded[service_id] = dict(prior)
+    return guarded
 
 
 def _normalize_fetched_documents(
