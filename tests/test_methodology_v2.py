@@ -318,6 +318,7 @@ def test_deep_research_uses_one_tool_free_structured_request(
                     ],
                 )
             )
+            yield SimpleNamespace(content=None)
 
     monkeypatch.setattr(
         "tenant_sec_agentic.pipeline._metered_model",
@@ -344,9 +345,10 @@ def test_deep_research_uses_one_tool_free_structured_request(
     )
 
     request = captured["request"]
+    assert request.model == "gemini-3.5-flash"
     assert request.config.tools is None
     assert request.config.automatic_function_calling.disable is True
-    assert request.config.response_schema is DeepResearchStructured
+    assert request.config.response_schema is None
     assert ctx.session.state["deep_research_output"]["unresolved"] == [
         "insufficient evidence"
     ]

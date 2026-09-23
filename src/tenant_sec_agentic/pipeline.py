@@ -595,7 +595,7 @@ class AssessmentPipeline(BaseAgent):
             f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```"
         )
         request = LlmRequest(
-            model=cfg.model_for("deep_research"),
+            model=cfg.model_for("deep_research").removeprefix("vertex_ai/"),
             contents=[
                 types.Content(
                     role="user",
@@ -606,7 +606,6 @@ class AssessmentPipeline(BaseAgent):
                 system_instruction=dr_prompt,
                 max_output_tokens=cfg.limits.max_output_tokens_per_call,
                 response_mime_type="application/json",
-                response_schema=DeepResearchStructured,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(
                     disable=True,
                 ),
@@ -618,7 +617,14 @@ class AssessmentPipeline(BaseAgent):
         ]
         if not responses:
             raise RuntimeError("deep research model returned no response")
-        content = responses[-1].content
+        content = next(
+            (
+                response.content
+                for response in reversed(responses)
+                if response.content is not None
+            ),
+            None,
+        )
         text = "".join(
             str(part.text or "")
             for part in (content.parts if content is not None else [])
