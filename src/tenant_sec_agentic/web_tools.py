@@ -11,11 +11,13 @@ import httpx
 import trafilatura
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
+from tenant_sec_agentic.usage import BudgetExceeded, consume_tool_call
 
 logger = logging.getLogger(__name__)
 
 STATE_DEEP_SEARCH_COUNT = "_deep_research_search_count"
 STATE_DEEP_FETCH_COUNT = "_deep_research_fetch_count"
+STATE_FETCHED_DOCUMENTS = "_fetched_documents"
 
 
 def _tavily_search(query: str, api_key: str) -> list[dict[str, str]]:
@@ -54,6 +56,15 @@ def web_search(query: str, tool_context: ToolContext) -> dict[str, Any]:
         if n >= lim:
             return {"error": "Budget exhausted", "results": []}
         tool_context.state[STATE_DEEP_SEARCH_COUNT] = n + 1
+    try:
+        consume_tool_call(
+            tool_context.state,
+            kind="search",
+            role=mode,
+            control_id=str(tool_context.state.get("current_control_id", "")),
+        )
+    except BudgetExceeded as exc:
+        return {"error": str(exc), "results": []}
 
     api_key = os.environ.get("TAVILY_API_KEY", "").strip()
     if not api_key:
@@ -86,6 +97,20 @@ def web_fetch(
                 "error_detail": "Budget exhausted",
             }
         tool_context.state[STATE_DEEP_FETCH_COUNT] = n + 1
+    try:
+        consume_tool_call(
+            tool_context.state,
+            kind="fetch",
+            role=mode,
+            control_id=str(tool_context.state.get("current_control_id", "")),
+        )
+    except BudgetExceeded as exc:
+        return {
+            "url": url,
+            "content": "",
+            "status": "error",
+            "error_detail": str(exc),
+        }
 
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -162,7 +187,16 @@ def web_fetch(
         text = r.text[:max_chars] if r.text else ""
 
     text = (text or "")[:max_chars]
-    return {"url": url, "content": text, "status": "ok", "error_detail": None}
+    result = {
+        "url": url,
+        "content": text,
+        "status": "ok",
+        "error_detail": None,
+    }
+    fetched = dict(tool_context.state.get(STATE_FETCHED_DOCUMENTS) or {})
+    fetched[url] = result
+    tool_context.state[STATE_FETCHED_DOCUMENTS] = fetched
+    return result
 
 
 def list_provider_services(tool_context: ToolContext) -> dict[str, Any]:

@@ -5,3 +5,6 @@ Focus on specific questions from skeptic_output.deep_research_questions and cons
 Search official docs, release notes, and high-signal community threads.
 
 Return JSON matching deep research schema: questions_investigated, optional revised_assessment, unresolved.
+Missing or inconclusive evidence remains `unknown`; it is never converted to
+L0. A revised assessed result must retain the exact supporting URLs in
+`sources_used` and in each assessed service.

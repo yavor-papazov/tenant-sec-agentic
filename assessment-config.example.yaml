@@ -5,15 +5,23 @@ provider:
   slug: "scaleway"
   display_name: "Scaleway"
   docs_base_url: "https://www.scaleway.com/en/docs"
+  assessment_id: "scaleway/public/fr-par/standard"
+  offering:
+    id: "public"
+    name: "Scaleway Public Cloud"
+    partition: "commercial"
+    regions: ["fr-par"]
+    edition: "standard"
+    cohort: "eu-public"
   services_in_scope:
-    - { id: "instances", name: "Instances (VMs)", category: "compute.vm" }
-    - { id: "object-storage", name: "Object Storage", category: "storage.object" }
-    - { id: "rdb", name: "Managed Databases", category: "database.relational" }
-    - { id: "kapsule", name: "Kubernetes Kapsule", category: "compute.containers" }
-    - { id: "functions", name: "Serverless Functions", category: "compute.serverless" }
-    - { id: "vpc", name: "VPC", category: "network.vpc" }
-    - { id: "load-balancer", name: "Load Balancers", category: "network.loadbalancer" }
-    - { id: "container-registry", name: "Container Registry", category: "compute.containers" }
+    - { id: "instances", name: "Instances (VMs)", category: "compute.vm", regions: ["fr-par"], edition: "standard" }
+    - { id: "object-storage", name: "Object Storage", category: "storage.object", regions: ["fr-par"], edition: "standard" }
+    - { id: "rdb", name: "Managed Databases", category: "database.relational", regions: ["fr-par"], edition: "standard" }
+    - { id: "kapsule", name: "Kubernetes Kapsule", category: "compute.containers", regions: ["fr-par"], edition: "standard" }
+    - { id: "functions", name: "Serverless Functions", category: "compute.serverless", regions: ["fr-par"], edition: "standard" }
+    - { id: "vpc", name: "VPC", category: "network.vpc", regions: ["fr-par"], edition: "standard" }
+    - { id: "load-balancer", name: "Load Balancers", category: "network.loadbalancer", regions: ["fr-par"], edition: "standard" }
+    - { id: "container-registry", name: "Container Registry", category: "compute.containers", regions: ["fr-par"], edition: "standard" }
 
 controls:
   scope: "all"
@@ -22,16 +30,37 @@ controls:
   #   - "gov.preventive-policy"
 
 models:
-  doc_fetch: "gemini/gemini-2.0-flash"
-  assessor: "gemini/gemini-2.0-flash"
-  skeptic: "gemini/gemini-2.0-flash"
-  consistency: "gemini/gemini-2.0-flash"
-  deep_research: "gemini/gemini-2.0-flash"
+  doc_fetch: "vertex_ai/gemini-3.5-flash"
+  assessor: "vertex_ai/gemini-3.5-flash"
+  skeptic: "vertex_ai/gemini-3.5-flash"
+  consistency: "vertex_ai/gemini-3.5-flash"
+  deep_research: "vertex_ai/gemini-3.5-flash"
+
+# Priority PayGo is designed for agentic workflows and avoids Standard PayGo's
+# ramp-up/acceleration limits. Use a supported endpoint (global, us, or eu);
+# GOOGLE_CLOUD_LOCATION and VERTEXAI_LOCATION select it. Priority costs more.
+vertex_traffic_class: "priority"
+
+pricing:
+  vertex_ai/gemini-2.5-flash: { input_per_million: 0.54, output_per_million: 4.50 }
+  vertex_ai/gemini-3.5-flash-lite: { input_per_million: 0.54, output_per_million: 4.50 }
+  vertex_ai/gemini-3.5-flash: { input_per_million: 2.70, output_per_million: 16.20 }
 
 limits:
-  max_deep_research_per_run: 10
-  max_search_calls_per_deep_research: 10
-  max_fetch_calls_per_deep_research: 5
+  max_model_calls_per_run: 40
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 100000
+  max_output_tokens_per_call: 8192
+  model_timeout_seconds: 120
+  max_model_turns_per_agent: 8
+  max_retries_per_run: 12
+  max_retries_per_call: 2
+  max_search_calls_per_run: 40
+  max_fetch_calls_per_run: 30
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 5
+  max_fetch_calls_per_deep_research: 3
+  max_projected_cost_usd: 10.0
   max_parallel_assessments: 1
 
 paths:

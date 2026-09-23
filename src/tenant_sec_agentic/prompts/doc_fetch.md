@@ -19,6 +19,8 @@ INSTRUCTIONS:
 6. If you find no relevant documentation after 3 search attempts with different
    queries, set doc_quality to "absent".
 
-Populate docs_fetched with url, title, content (from fetch), and relevance.
+Populate docs_fetched with only url, title, and relevance. The tool runtime
+reattaches fetched content after your structured response; do not repeat full
+page content in the final JSON.
 Set services_with_docs and services_without_docs based on in-scope services.
 Set doc_quality to comprehensive, adequate, thin, or absent.

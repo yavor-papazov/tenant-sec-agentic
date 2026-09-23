@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 from tenant_sec_agentic.artifacts import control_entry_for_provider_schema
 
@@ -28,34 +28,43 @@ def approved_entry(a: dict) -> tuple[bool, dict | None]:
     rev = a.get("review") or {}
     st = rev.get("status")
     if st == "approved":
+        result_status = str(a.get("result_status") or "unknown")
         score = a.get("recommended_score")
         assessor = a.get("assessor") or {}
         rec_s = a.get("recommended_services")
-        entry = control_entry_for_provider_schema(score, assessor, rec_s)
+        entry = control_entry_for_provider_schema(
+            result_status,
+            score,
+            assessor,
+            rec_s,
+            str(a.get("overall_confidence") or "low"),
+        )
         return True, entry
     if st == "adjusted":
         adj = rev.get("adjusted_score")
         if adj is None:
             return False, None
         assessor = dict(a.get("assessor") or {})
+        assessor["evidence"] = str(
+            rev.get("adjustment_reasoning") or assessor.get("evidence", "")
+        )
         if adj == "mixed":
             services = rev.get("adjusted_services") or {}
-            entry = {
-                "score": "mixed",
-                "summary": str(rev.get("adjustment_reasoning") or assessor.get("evidence", ""))[
-                    :500
-                ],
-                "services": services,
-                "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            }
+            entry = control_entry_for_provider_schema(
+                "assessed",
+                "mixed",
+                assessor,
+                services,
+                str(a.get("overall_confidence") or "low"),
+            )
         else:
-            entry = {
-                "score": int(adj),
-                "evidence": str(
-                    rev.get("adjustment_reasoning") or assessor.get("evidence", "")
-                ),
-                "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            }
+            entry = control_entry_for_provider_schema(
+                "assessed",
+                int(adj),
+                assessor,
+                None,
+                str(a.get("overall_confidence") or "low"),
+            )
         return True, entry
     return False, None
 
@@ -110,7 +119,6 @@ def main(argv: list[str] | None = None) -> None:
     existing_path = repo / "providers" / f"{slug}.yaml"
     if existing_path.is_file():
         base = yaml.safe_load(existing_path.read_text(encoding="utf-8"))
-        services = base.get("services_in_scope")
         display_name = base.get("display_name", slug)
         revision = int(base.get("revision", 0)) + 1
     else:
@@ -121,21 +129,39 @@ def main(argv: list[str] | None = None) -> None:
 
     methodology_version = "1.0"
     if assessments:
-        methodology_version = str(assessments[0].get("methodology_version", "1.0"))
+        methodology_version = str(assessments[0].get("methodology_version", "2.0"))
+    first = assessments[0] if assessments else {}
+    services = first.get("services_in_scope")
+    assessment_id = first.get("assessment_id")
+    offering = first.get("offering")
+    if not services or not assessment_id or not offering:
+        sys.exit("Assessments are missing strict v2 identity/scope metadata")
 
     profile = {
         "provider": slug,
+        "assessment_id": assessment_id,
         "display_name": display_name,
         "assessed_by": "community:pipeline",
         "assessed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "methodology_version": methodology_version,
         "revision": revision,
+        "offering": offering,
         "services_in_scope": services,
-        "controls": {**base.get("controls", {}), **controls},
+        "controls": controls,
     }
 
-    v = Draft202012Validator(schema)
+    v = Draft202012Validator(schema, format_checker=FormatChecker())
     errs = [e.message for e in v.iter_errors(profile)]
+    for control_id, entry in controls.items():
+        if entry.get("status") == "assessed":
+            if not entry.get("references"):
+                errs.append(
+                    f"{control_id}: assessed v2 result requires references"
+                )
+            if not entry.get("confidence"):
+                errs.append(
+                    f"{control_id}: assessed v2 result requires confidence"
+                )
     if errs:
         sys.exit("Profile validation failed:\n" + "\n".join(errs))
 

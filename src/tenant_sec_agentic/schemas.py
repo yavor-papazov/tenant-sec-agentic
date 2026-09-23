@@ -4,13 +4,23 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+AssessmentStatus = Literal[
+    "assessed",
+    "unknown",
+    "conflicting",
+    "not_assessed",
+    "not_applicable",
+    "out_of_scope",
+]
 
 
 class DocFetchedItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     url: str = ""
     title: str = ""
-    content: str = ""
     relevance: Literal["high", "medium", "low"] = "medium"
 
 
@@ -22,18 +32,45 @@ class DocFetchStructured(BaseModel):
 
 
 class ServiceScore(BaseModel):
-    score: int = Field(ge=0, le=3)
+    status: AssessmentStatus = "unknown"
+    score: int | None = Field(default=None, ge=0, le=3)
     evidence: str = ""
+    confidence: Literal["high", "medium", "low"] = "low"
+    sources_used: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def score_matches_status(self) -> "ServiceScore":
+        if self.status == "assessed" and self.score is None:
+            raise ValueError("assessed service requires score")
+        if self.status != "assessed" and self.score is not None:
+            raise ValueError("non-assessed service prohibits score")
+        return self
 
 
 class AssessorStructured(BaseModel):
-    score: int | Literal["mixed"] = 0
+    status: AssessmentStatus
+    score: int | Literal["mixed"] | None = Field(
+        description=(
+            "Required when status is assessed; null for every non-assessed "
+            "status"
+        )
+    )
     services: dict[str, ServiceScore] = Field(default_factory=dict)
-    evidence: str = ""
+    evidence: str
     confidence: Literal["high", "medium", "low"] = "low"
     flags: list[str] = Field(default_factory=list)
     deep_research_recommended: bool = False
     sources_used: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def score_matches_status(self) -> "AssessorStructured":
+        if self.status == "assessed" and self.score is None:
+            raise ValueError("assessed result requires score")
+        if self.status != "assessed" and self.score is not None:
+            raise ValueError("non-assessed result prohibits score")
+        if self.score == "mixed" and not self.services:
+            raise ValueError("mixed result requires services")
+        return self
 
 
 class SkepticFlag(BaseModel):
@@ -43,13 +80,25 @@ class SkepticFlag(BaseModel):
 
 
 class SkepticStructured(BaseModel):
-    verdict: Literal["confirm", "downgrade", "flag_deep_research"] = "confirm"
-    original_score: int | Literal["mixed"] = 0
-    recommended_score: int | Literal["mixed"] = 0
-    recommended_services: dict[str, ServiceScore] = Field(default_factory=dict)
-    reasoning: str = ""
+    status: AssessmentStatus
+    score: int | Literal["mixed"] | None = Field(
+        description=(
+            "Required when status is assessed; prohibited for every "
+            "non-assessed status"
+        ),
+    )
+    services: dict[str, ServiceScore] = Field(default_factory=dict)
+    reasoning: str
     skepticism_flags: list[SkepticFlag] = Field(default_factory=list)
     deep_research_questions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def score_matches_status(self) -> "SkepticStructured":
+        if self.status == "assessed" and self.score is None:
+            raise ValueError("assessed result requires score")
+        if self.status != "assessed" and self.score is not None:
+            raise ValueError("non-assessed result prohibits score")
+        return self
 
 
 class ConsistencyFlag(BaseModel):

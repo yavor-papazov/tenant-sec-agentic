@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import random
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ import yaml
 from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
-from google.adk.models.lite_llm import LiteLlm
+from google.adk.events.event_actions import EventActions
 from google.genai import types
 from typing_extensions import override
 
@@ -27,6 +28,7 @@ from tenant_sec_agentic.artifacts import (
     render_index_html,
 )
 from tenant_sec_agentic.config import AssessmentConfig, config_from_state, config_to_serializable
+from tenant_sec_agentic.metered_model import MeteredLiteLlm
 from tenant_sec_agentic.repo import load_all_controls, resolve_control_scope
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
@@ -35,7 +37,18 @@ from tenant_sec_agentic.schemas import (
     DocFetchStructured,
     SkepticStructured,
 )
-from tenant_sec_agentic.web_tools import STATE_DEEP_FETCH_COUNT, STATE_DEEP_SEARCH_COUNT, doc_fetch_tools
+from tenant_sec_agentic.web_tools import (
+    STATE_DEEP_FETCH_COUNT,
+    STATE_DEEP_SEARCH_COUNT,
+    STATE_FETCHED_DOCUMENTS,
+    doc_fetch_tools,
+)
+from tenant_sec_agentic.usage import (
+    BudgetExceeded,
+    consume_retry,
+    new_ledger,
+    write_ledger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,23 +76,38 @@ def _load_prompt(name: str) -> str:
 
 
 async def _drain_agent(agent: LlmAgent, ctx: InvocationContext) -> None:
-    async for _ in agent.run_async(ctx):
-        pass
+    async for event in agent.run_async(ctx):
+        # Runner normally persists yielded events. These role agents are
+        # invoked directly by the orchestrator, so retain their model/tool
+        # turns explicitly; otherwise every tool iteration sees the same
+        # request and repeats indefinitely.
+        await ctx.session_service.append_event(
+            session=ctx.session, event=event
+        )
 
 
 async def _with_retries_drain(
-    agent: LlmAgent, ctx: InvocationContext, retries: int = 5
+    agent: LlmAgent,
+    ctx: InvocationContext,
+    cfg: AssessmentConfig,
+    role: str,
 ) -> None:
-    delays = (2, 4, 8, 16, 32)
     last: BaseException | None = None
-    for i in range(retries):
+    control_id = str(ctx.session.state.get("current_control_id", ""))
+    attempts = cfg.limits.max_retries_per_call + 1
+    for i in range(attempts):
         try:
             await _drain_agent(agent, ctx)
             return
         except Exception as e:
+            if isinstance(e, BudgetExceeded):
+                raise
             last = e
-            if i < len(delays):
-                await asyncio.sleep(delays[i])
+            if i + 1 >= attempts:
+                break
+            consume_retry(ctx.session.state, cfg, role, control_id)
+            base_delay = min(60.0, float(2**i))
+            await asyncio.sleep(base_delay + random.uniform(0.0, 1.0))
             logger.warning("LLM/API retry %s after error: %s", i + 1, e)
     assert last is not None
     raise last
@@ -107,6 +135,8 @@ class AssessmentPipeline(BaseAgent):
         slug = cfg.provider.slug
 
         hashes = prompt_hashes()
+        if not isinstance(st.get("usage_ledger"), dict):
+            st["usage_ledger"] = new_ledger(cfg)
 
         for item in queue:
             if item.get("status") in ("completed", "skipped"):
@@ -123,6 +153,7 @@ class AssessmentPipeline(BaseAgent):
             st["pipeline_mode"] = "doc_fetch"
             st.pop(STATE_DEEP_SEARCH_COUNT, None)
             st.pop(STATE_DEEP_FETCH_COUNT, None)
+            st.pop(STATE_FETCHED_DOCUMENTS, None)
             for k in (
                 "doc_fetch_output",
                 "assessor_output",
@@ -139,6 +170,7 @@ class AssessmentPipeline(BaseAgent):
             deep_out: dict[str, Any] | None = None
             final_status = "needs_human_review"
             err_detail: str | None = None
+            warning_detail: str | None = None
 
             try:
                 if cfg.mock_mode:
@@ -147,7 +179,7 @@ class AssessmentPipeline(BaseAgent):
                     assessor_out = _mock_assessor(control_def, cfg)
                     st["assessor_output"] = assessor_out
                     skip_skeptic_m = (
-                        assessor_out.get("score") == 0
+                        assessor_out.get("status") == "unknown"
                         and doc_fetch_out.get("doc_quality") == "absent"
                     )
                     if not skip_skeptic_m:
@@ -169,7 +201,7 @@ class AssessmentPipeline(BaseAgent):
                     assessor_out = st.get("assessor_output") or {}
 
                     skip_skeptic = (
-                        assessor_out.get("score") == 0
+                        assessor_out.get("status") == "unknown"
                         and doc_fetch_out.get("doc_quality") == "absent"
                     )
                     if not skip_skeptic:
@@ -180,8 +212,24 @@ class AssessmentPipeline(BaseAgent):
 
                     skip_consistency = not peer_profiles
                     if not skip_consistency:
-                        await self._run_consistency(ctx, cfg, control_def, peer_profiles)
-                        consistency_out = st.get("consistency_output") or {}
+                        try:
+                            await self._run_consistency(
+                                ctx, cfg, control_def, peer_profiles
+                            )
+                            consistency_out = (
+                                st.get("consistency_output") or {}
+                            )
+                        except Exception as exc:
+                            logger.exception(
+                                "optional consistency check failed for %s: %s",
+                                cid,
+                                exc,
+                            )
+                            warning_detail = (
+                                "Optional consistency check failed: "
+                                f"{exc}"
+                            )
+                            consistency_out = None
                     else:
                         consistency_out = None
 
@@ -200,8 +248,27 @@ class AssessmentPipeline(BaseAgent):
                             )
                             st.pop(STATE_DEEP_SEARCH_COUNT, None)
                             st.pop(STATE_DEEP_FETCH_COUNT, None)
-                            await self._run_deep_research(ctx, cfg, control_def)
-                            deep_out = st.get("deep_research_output")
+                            try:
+                                await self._run_deep_research(
+                                    ctx, cfg, control_def
+                                )
+                                deep_out = st.get("deep_research_output")
+                            except Exception as exc:
+                                logger.exception(
+                                    "optional deep research failed for %s: %s",
+                                    cid,
+                                    exc,
+                                )
+                                detail = (
+                                    "Optional deep research failed: "
+                                    f"{exc}"
+                                )
+                                warning_detail = (
+                                    f"{warning_detail}; {detail}"
+                                    if warning_detail
+                                    else detail
+                                )
+                                deep_out = None
 
             except Exception as e:
                 logger.exception("control %s failed: %s", cid, e)
@@ -209,17 +276,25 @@ class AssessmentPipeline(BaseAgent):
                 final_status = "error"
                 err_detail = str(e)
 
-            rec_score, rec_services, conf = _final_recommendation(
+            result_status, rec_score, rec_services, conf, final_assessor = (
+                _final_recommendation(
                 assessor_out, skeptic_out, deep_out
+            )
             )
 
             control_entry = control_entry_for_provider_schema(
-                rec_score, assessor_out, rec_services
+                result_status,
+                rec_score,
+                final_assessor,
+                rec_services,
+                conf,
             )
             schema_errs = validate_control_against_provider_schema(
                 repo_root,
                 slug,
                 cfg.provider.display_name,
+                cfg.provider.assessment_id,
+                cfg.provider.offering,
                 cfg.provider.services_in_scope,
                 cid,
                 control_entry,
@@ -230,6 +305,9 @@ class AssessmentPipeline(BaseAgent):
                 control_id=cid,
                 provider_slug=slug,
                 provider_display_name=cfg.provider.display_name,
+                assessment_id=cfg.provider.assessment_id,
+                offering=cfg.provider.offering,
+                services_in_scope=cfg.provider.services_in_scope,
                 session_id=ctx.session.id,
                 methodology_version=methodology_version,
                 doc_fetch=doc_fetch_out,
@@ -239,10 +317,11 @@ class AssessmentPipeline(BaseAgent):
                 deep_research=deep_out,
                 recommended_score=rec_score,
                 recommended_services=rec_services,
+                result_status=result_status,
                 overall_confidence=conf,
                 status=assessment_status,
                 prompt_hashes=hashes,
-                error_detail=err_detail,
+                error_detail=err_detail or warning_detail,
             )
             internal_errs = validate_internal_assessment(assessment)
             if internal_errs:
@@ -275,9 +354,22 @@ class AssessmentPipeline(BaseAgent):
             )
 
         _write_dashboard(cfg, controls_index, queue)
+        write_ledger(st, cfg)
+        failed_controls = [
+            str(item.get("control"))
+            for item in queue
+            if item.get("status") == "error"
+        ]
         yield Event(
             invocation_id=ctx.invocation_id,
             author=self.name,
+            actions=EventActions(
+                state_delta={
+                    "assessment_queue": queue,
+                    "pipeline_failed_controls": failed_controls,
+                    "usage_ledger": st["usage_ledger"],
+                }
+            ),
             content=types.Content(
                 role="model",
                 parts=[types.Part(text="Pipeline finished all queued controls.")],
@@ -292,7 +384,7 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         doc_prompt = _load_prompt("doc_fetch.md")
-        model = LiteLlm(model=cfg.model_for("doc_fetch"))
+        model = _metered_model(ctx, cfg, "doc_fetch")
         agent = LlmAgent(
             name="doc_fetch_agent",
             model=model,
@@ -300,10 +392,22 @@ class AssessmentPipeline(BaseAgent):
             tools=doc_fetch_tools(),
             output_schema=DocFetchStructured,
             output_key="doc_fetch_output",
-            include_contents="none",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
         )
         user_text = _user_block_doc_fetch(cfg, control_def)
-        await _inject_user_and_drain(agent, ctx, user_text)
+        await _inject_user_and_drain(agent, ctx, user_text, cfg, "doc_fetch")
+        output = ctx.session.state.get("doc_fetch_output")
+        if not isinstance(output, dict):
+            raise RuntimeError("doc_fetch agent produced no structured output")
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+        for document in output.get("docs_fetched") or []:
+            cached = fetched.get(document.get("url"))
+            if isinstance(cached, dict):
+                document["content"] = cached.get("content", "")
+        ctx.session.state["doc_fetch_output"] = output
 
     async def _run_assessor(
         self,
@@ -315,17 +419,26 @@ class AssessmentPipeline(BaseAgent):
         assessor_prompt = _load_prompt("assessor.md").format(
             methodology=methodology_text
         )
-        model = LiteLlm(model=cfg.model_for("assessor"))
+        model = _metered_model(ctx, cfg, "assessor")
         agent = LlmAgent(
             name="assessor_agent",
             model=model,
             instruction=assessor_prompt,
             output_schema=AssessorStructured,
             output_key="assessor_output",
-            include_contents="none",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
         )
-        user_text = f"CONTROL YAML:\n```yaml\n{yaml.safe_dump(control_def, sort_keys=False)}```"
-        await _inject_user_and_drain(agent, ctx, user_text)
+        docs = ctx.session.state.get("doc_fetch_output") or {}
+        user_text = (
+            f"CONTROL YAML:\n```yaml\n"
+            f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"DOCUMENTATION BUNDLE:\n```json\n"
+            f"{json.dumps(docs, default=str)}```"
+        )
+        await _inject_user_and_drain(agent, ctx, user_text, cfg, "assessor")
 
     async def _run_skeptic(
         self,
@@ -334,17 +447,31 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         skeptic_prompt = _load_prompt("skeptic.md")
-        model = LiteLlm(model=cfg.model_for("skeptic"))
+        model = _metered_model(ctx, cfg, "skeptic")
         agent = LlmAgent(
             name="skeptic_agent",
             model=model,
             instruction=skeptic_prompt,
             output_schema=SkepticStructured,
             output_key="skeptic_output",
-            include_contents="none",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
         )
-        user_text = f"CONTROL YAML:\n```yaml\n{yaml.safe_dump(control_def, sort_keys=False)}```"
-        await _inject_user_and_drain(agent, ctx, user_text)
+        docs = ctx.session.state.get("doc_fetch_output") or {}
+        user_text = (
+            f"CONTROL YAML:\n```yaml\n"
+            f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"DOCUMENTATION BUNDLE:\n```json\n"
+            f"{json.dumps(docs, default=str)}```"
+        )
+        await _inject_user_and_drain(agent, ctx, user_text, cfg, "skeptic")
+        independent = ctx.session.state.get("skeptic_output") or {}
+        ctx.session.state["skeptic_output"] = _reconcile_skeptic(
+            ctx.session.state.get("assessor_output") or {},
+            independent,
+        )
 
     async def _run_consistency(
         self,
@@ -354,7 +481,7 @@ class AssessmentPipeline(BaseAgent):
         peer_profiles: dict[str, Any],
     ) -> None:
         c_prompt = _load_prompt("consistency.md")
-        model = LiteLlm(model=cfg.model_for("consistency"))
+        model = _metered_model(ctx, cfg, "consistency")
         cid = control_def["id"]
         peer_scores = {
             p: (data.get("controls") or {}).get(cid)
@@ -367,13 +494,16 @@ class AssessmentPipeline(BaseAgent):
             instruction=c_prompt,
             output_schema=ConsistencyStructured,
             output_key="consistency_output",
-            include_contents="none",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
         )
         user_text = (
             f"CONTROL: {cid}\nPEER SCORES JSON:\n"
             f"{json.dumps(peer_scores, indent=2, default=str)}"
         )
-        await _inject_user_and_drain(agent, ctx, user_text)
+        await _inject_user_and_drain(agent, ctx, user_text, cfg, "consistency")
 
     async def _run_deep_research(
         self,
@@ -382,7 +512,7 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         dr_prompt = _load_prompt("deep_research.md")
-        model = LiteLlm(model=cfg.model_for("deep_research"))
+        model = _metered_model(ctx, cfg, "deep_research")
         agent = LlmAgent(
             name="deep_research_agent",
             model=model,
@@ -390,27 +520,72 @@ class AssessmentPipeline(BaseAgent):
             tools=doc_fetch_tools(),
             output_schema=DeepResearchStructured,
             output_key="deep_research_output",
-            include_contents="none",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
         )
-        user_text = f"CONTROL YAML:\n```yaml\n{yaml.safe_dump(control_def, sort_keys=False)}```"
-        await _inject_user_and_drain(agent, ctx, user_text)
+        user_text = (
+            f"CONTROL YAML:\n```yaml\n"
+            f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"DOCUMENTATION BUNDLE:\n```json\n"
+            f"{json.dumps(ctx.session.state.get('doc_fetch_output') or {}, default=str)}```\n"
+            f"SKEPTIC QUESTIONS:\n```json\n"
+            f"{json.dumps(ctx.session.state.get('skeptic_output') or {}, default=str)}```\n"
+            f"CONSISTENCY FLAGS:\n```json\n"
+            f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```"
+        )
+        await _inject_user_and_drain(
+            agent,
+            ctx,
+            user_text,
+            cfg,
+            "deep_research",
+        )
 
 
 async def _inject_user_and_drain(
-    agent: LlmAgent, ctx: InvocationContext, user_text: str
+    agent: LlmAgent,
+    ctx: InvocationContext,
+    user_text: str,
+    cfg: AssessmentConfig,
+    role: str,
 ) -> None:
     """Append user turn to session and run sub-agent with retries."""
-    ctx.session.events.append(
-        Event(
-            invocation_id=ctx.invocation_id,
+    control_id = str(ctx.session.state.get("current_control_id", "control"))
+    branch = ".".join(
+        part
+        for part in (ctx.branch, control_id, role)
+        if part
+    )
+    role_ctx = ctx.model_copy(update={"branch": branch})
+    await role_ctx.session_service.append_event(
+        session=role_ctx.session,
+        event=Event(
+            invocation_id=role_ctx.invocation_id,
             author="user",
+            branch=branch,
             content=types.Content(
                 role="user",
                 parts=[types.Part(text=user_text)],
             ),
-        )
+        ),
     )
-    await _with_retries_drain(agent, ctx)
+    await _with_retries_drain(agent, role_ctx, cfg, role)
+
+
+def _metered_model(
+    ctx: InvocationContext,
+    cfg: AssessmentConfig,
+    role: str,
+) -> MeteredLiteLlm:
+    return MeteredLiteLlm(
+        model=cfg.model_for(role),
+        state=ctx.session.state,
+        cfg=cfg,
+        role=role,
+        control_id=str(ctx.session.state.get("current_control_id", "")),
+    )
 
 
 def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) -> str:
@@ -445,43 +620,96 @@ def _final_recommendation(
     assessor: dict[str, Any],
     skeptic: dict[str, Any] | None,
     deep: dict[str, Any] | None,
-) -> tuple[Any, dict[str, int] | None, str]:
+) -> tuple[str, Any, dict[str, Any] | None, str, dict[str, Any]]:
     conf = str(assessor.get("confidence") or "low")
 
     revised = (deep or {}).get("revised_assessment")
-    if isinstance(revised, dict) and revised.get("score") is not None:
-        score = revised["score"]
-        services = None
-        if score == "mixed" and revised.get("services"):
-            services = {
-                k: int(v["score"])
-                for k, v in revised["services"].items()
-                if isinstance(v, dict) and "score" in v
-            }
-        return score, services, str(revised.get("confidence") or conf)
+    if isinstance(revised, dict) and revised.get("status"):
+        status = str(revised["status"])
+        score = revised.get("score")
+        services = revised.get("services") if score == "mixed" else None
+        return (
+            status,
+            score,
+            services,
+            str(revised.get("confidence") or conf),
+            revised,
+        )
 
     if skeptic and skeptic.get("verdict") == "downgrade":
-        rs = skeptic.get("recommended_score")
-        if rs is not None:
-            if rs == "mixed" and skeptic.get("recommended_services"):
-                services = {
-                    k: int(v["score"])
-                    for k, v in (skeptic["recommended_services"] or {}).items()
-                    if isinstance(v, dict)
-                }
-                return "mixed", services, conf
-            if isinstance(rs, int):
-                return rs, None, conf
+        status = str(skeptic.get("recommended_status") or "unknown")
+        score = skeptic.get("recommended_score")
+        services = (
+            skeptic.get("recommended_services")
+            if score == "mixed"
+            else None
+        )
+        return status, score, services, conf, skeptic
 
+    status = str(assessor.get("status") or "unknown")
     score = assessor.get("score")
-    services = None
-    if score == "mixed" and assessor.get("services"):
-        services = {
-            k: int(v["score"])
-            for k, v in assessor["services"].items()
-            if isinstance(v, dict) and "score" in v
-        }
-    return score, services, conf
+    services = assessor.get("services") if score == "mixed" else None
+    return status, score, services, conf, assessor
+
+
+def _reconcile_skeptic(
+    assessor: dict[str, Any],
+    independent: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare independent output only after it has been produced."""
+    out = dict(independent)
+    out["independent_status"] = independent.get("status", "unknown")
+    out["independent_score"] = independent.get("score")
+    out["independent_services"] = independent.get("services") or {}
+    out["recommended_status"] = assessor.get("status", "unknown")
+    out["recommended_score"] = assessor.get("score")
+    out["recommended_services"] = assessor.get("services") or {}
+
+    assessor_status = assessor.get("status")
+    skeptic_status = independent.get("status")
+    if assessor_status != skeptic_status:
+        out["verdict"] = "flag_deep_research"
+        questions = list(out.get("deep_research_questions") or [])
+        questions.append(
+            "Resolve the independent assessors' disagreement on assessment status."
+        )
+        out["deep_research_questions"] = questions
+        return out
+
+    assessor_value = _comparable_score(assessor)
+    skeptic_value = _comparable_score(independent)
+    if (
+        assessor_status == "assessed"
+        and assessor_value is not None
+        and skeptic_value is not None
+        and skeptic_value < assessor_value
+    ):
+        out["verdict"] = "downgrade"
+        out["recommended_status"] = skeptic_status
+        out["recommended_score"] = independent.get("score")
+        out["recommended_services"] = independent.get("services") or {}
+    elif assessor_value != skeptic_value:
+        out["verdict"] = "flag_deep_research"
+    else:
+        out["verdict"] = "confirm"
+    return out
+
+
+def _comparable_score(result: dict[str, Any]) -> float | None:
+    score = result.get("score")
+    if isinstance(score, int):
+        return float(score)
+    if score == "mixed":
+        values = [
+            service.get("score")
+            for service in (result.get("services") or {}).values()
+            if isinstance(service, dict)
+            and service.get("status") == "assessed"
+            and isinstance(service.get("score"), int)
+        ]
+        if values:
+            return sum(values) / len(values)
+    return None
 
 
 def _mock_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) -> dict[str, Any]:
@@ -495,28 +723,11 @@ def _mock_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) -> dict[
 
 
 def _mock_assessor(control_def: dict[str, Any], cfg: AssessmentConfig) -> dict[str, Any]:
-    scoped = bool(control_def.get("service_scoped"))
-    if scoped:
-        services = {
-            s["id"]: {
-                "score": 0,
-                "evidence": "No documentation found for this capability on this service.",
-            }
-            for s in cfg.provider.services_in_scope
-        }
-        return {
-            "score": "mixed",
-            "services": services,
-            "evidence": "Mock pipeline run — no docs retrieved.",
-            "confidence": "low",
-            "flags": ["mock-mode"],
-            "deep_research_recommended": False,
-            "sources_used": [],
-        }
     return {
-        "score": 0,
+        "status": "unknown",
+        "score": None,
         "services": {},
-        "evidence": "Mock pipeline run — no documentation.",
+        "evidence": "Mock pipeline run — no authoritative documentation.",
         "confidence": "low",
         "flags": ["mock-mode"],
         "deep_research_recommended": False,
@@ -525,26 +736,15 @@ def _mock_assessor(control_def: dict[str, Any], cfg: AssessmentConfig) -> dict[s
 
 
 def _mock_skeptic(assessor: dict[str, Any]) -> dict[str, Any]:
-    sc = assessor.get("score")
-    if sc not in (0, 1, 2, 3, "mixed"):
-        sc = 0
-    rec_services: dict[str, Any] = {}
-    if sc == "mixed" and isinstance(assessor.get("services"), dict):
-        for sid, data in assessor["services"].items():
-            if isinstance(data, dict) and "score" in data:
-                rec_services[sid] = {
-                    "score": int(data["score"]),
-                    "evidence": str(data.get("evidence", "")),
-                }
-    return {
-        "verdict": "confirm",
-        "original_score": sc,
-        "recommended_score": sc,
-        "recommended_services": rec_services,
+    independent = {
+        "status": assessor.get("status", "unknown"),
+        "score": assessor.get("score"),
+        "services": assessor.get("services") or {},
         "reasoning": "Mock pipeline — skeptic confirms assessor output.",
         "skepticism_flags": [],
         "deep_research_questions": [],
     }
+    return _reconcile_skeptic(assessor, independent)
 
 
 def _mock_consistency() -> dict[str, Any]:
@@ -573,7 +773,9 @@ def _write_dashboard(
         status = item.get("status", "")
         if p.is_file():
             data = yaml.safe_load(p.read_text(encoding="utf-8"))
-            score = data.get("recommended_score", "")
+            score = data.get("recommended_score")
+            if score is None:
+                score = str(data.get("result_status") or "unknown").upper()
             conf = data.get("overall_confidence", "")
             sk = data.get("skeptic") or {}
             skeptic_v = sk.get("verdict", "")
@@ -611,7 +813,7 @@ def initial_session_state(cfg: AssessmentConfig) -> dict[str, Any]:
 
     validate_repo_layout(cfg.paths.repo_root)
     methodology_text, interim = load_methodology_or_interim(cfg.paths.repo_root)
-    methodology_version = "interim-prd-4.4" if interim else "1.0"
+    methodology_version = "interim-prd-4.4" if interim else "2.0"
     controls = load_all_controls(cfg.paths.repo_root)
     control_ids = resolve_control_scope(cfg.controls_scope, controls)
     peer = load_provider_profiles_scores(
@@ -629,5 +831,6 @@ def initial_session_state(cfg: AssessmentConfig) -> dict[str, Any]:
         "controls_json": json.dumps(controls),
         "assessment_queue": queue,
         "deep_research_invocations": 0,
+        "usage_ledger": new_ledger(cfg),
         "pipeline_version": __version__,
     }

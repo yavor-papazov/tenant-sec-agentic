@@ -43,9 +43,9 @@ def _interim_methodology_text() -> str:
 
 Level 0 — Impossible from tenant space
 The platform does not expose this capability through any tenant-accessible interface
-(console, API, CLI, SDK, IaC). Score L0 when: no documentation exists for the capability,
-OR documentation explicitly states the feature is not available, OR the feature is
-provider-managed with no tenant visibility or control.
+(console, API, CLI, SDK, IaC). L0 requires affirmative official evidence, a
+reproducible interface/live test, or provider confirmation that the capability
+is unavailable. Missing documentation is unknown and carries no score.
 
 Level 1 — Requires own processing loop
 The outcome is achievable only through custom tenant-built automation. The provider does

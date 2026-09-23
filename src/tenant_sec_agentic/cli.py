@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> None:
                 session_id=session_id,
             )
             if existing is None:
-                await session_service.create_session(
+                existing = await session_service.create_session(
                     app_name="tenant_sec_agentic",
                     user_id=user_id,
                     session_id=session_id,
@@ -90,11 +90,27 @@ def main(argv: list[str] | None = None) -> None:
                 new_message=msg,
             ):
                 pass
+            completed = await session_service.get_session(
+                app_name="tenant_sec_agentic",
+                user_id=user_id,
+                session_id=session_id,
+            )
+            failed = (
+                completed.state.get("pipeline_failed_controls", [])
+                if completed is not None
+                else ["unknown"]
+            )
+            if failed:
+                raise RuntimeError(
+                    "Assessment pipeline failed controls: "
+                    + ", ".join(failed)
+                )
 
     asyncio.run(_run())
     print(
         f"Done. Assessments: {cfg.paths.assessments_dir / cfg.provider.slug}\n"
-        f"Reports: {cfg.paths.reports_dir / cfg.provider.slug}"
+        f"Reports: {cfg.paths.reports_dir / cfg.provider.slug}\n"
+        f"Usage: {cfg.paths.assessments_dir / cfg.provider.slug / 'usage-ledger.json'}"
     )
 
 
