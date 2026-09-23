@@ -354,6 +354,9 @@ def test_deep_research_uses_one_tool_free_structured_request(
     assert request.config.tools is None
     assert request.config.automatic_function_calling.disable is True
     assert request.config.response_schema is None
+    assert "questions_investigated" in str(
+        request.config.system_instruction
+    )
     assert ctx.session.state["deep_research_output"]["unresolved"] == [
         "insufficient evidence"
     ]

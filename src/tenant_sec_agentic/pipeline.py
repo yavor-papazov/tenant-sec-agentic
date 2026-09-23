@@ -678,6 +678,10 @@ async def _generate_json(
 ) -> dict[str, Any]:
     """Run a metered, context-isolated JSON turn without constrained decoding."""
     model = _metered_model(ctx, cfg, role)
+    schema_json = json.dumps(
+        schema.model_json_schema(),
+        separators=(",", ":"),
+    )
     request = LlmRequest(
         model=cfg.model_for(role).removeprefix("vertex_ai/"),
         contents=[
@@ -687,7 +691,12 @@ async def _generate_json(
             )
         ],
         config=types.GenerateContentConfig(
-            system_instruction=instruction,
+            system_instruction=(
+                f"{instruction}\n\n"
+                "Return exactly one JSON object matching this schema. "
+                "Use the field names and value types exactly; do not add "
+                f"properties:\n{schema_json}"
+            ),
             max_output_tokens=cfg.limits.max_output_tokens_per_call,
             response_mime_type="application/json",
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
