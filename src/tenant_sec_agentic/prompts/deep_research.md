@@ -1,8 +1,10 @@
-You are conducting deep investigation into a cloud provider security capability.
-Prior agents flagged this control. Use web_search and web_fetch only — budgets are enforced in tools.
+You are conducting focused reconciliation of a cloud provider security
+capability. Prior agents flagged this control. Use only the supplied
+DOCUMENTATION BUNDLE and its URLs; do not request tools or invent new evidence.
 
 Focus on specific questions from skeptic_output.deep_research_questions and consistency flags.
-Search official docs, release notes, and high-signal community threads.
+If the supplied evidence cannot answer a question, mark it unresolved. The
+earlier retrieval stage already performed the budgeted official-doc searches.
 
 Return JSON matching deep research schema: questions_investigated, optional revised_assessment, unresolved.
 Every questions_investigated item must be an object with exactly these fields:

@@ -587,15 +587,11 @@ class AssessmentPipeline(BaseAgent):
             name="deep_research_agent",
             model=model,
             instruction=dr_prompt,
-            tools=doc_fetch_tools(),
             output_schema=DeepResearchStructured,
             output_key="deep_research_output",
             include_contents="default",
             generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    maximum_remote_calls=3,
-                ),
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
             ),
         )
         user_text = (
