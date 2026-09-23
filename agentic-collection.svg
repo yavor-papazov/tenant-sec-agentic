@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="610" viewBox="0 0 1400 610" role="img" aria-labelledby="title desc">
+  <title id="title">tenant-sec agentic collection and assessment process</title>
+  <desc id="desc">A control and assessment scope drive document discovery and retrieval from untrusted provider sources. An assessor, independent skeptic, consistency check, and optional deep research produce reviewable artifacts for human approval. A warning marks the current absence of a prompt-injection filter.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-accent" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .lane { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; letter-spacing: 1.4px; }
+      .box-title { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .box-copy { font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .small { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748b; }
+      .warning { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #991b1b; }
+      .arrow { stroke: #475569; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .accent-arrow { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow-accent); }
+      .feedback { stroke: #7c3aed; stroke-width: 3; stroke-dasharray: 8 7; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1400" height="610" rx="22" fill="#f8fafc"/>
+  <text x="46" y="48" class="title">Agentic evidence collection: traceable by design, human-approved by default</text>
+
+  <text x="46" y="103" class="lane">SCOPE</text>
+  <text x="340" y="103" class="lane">COLLECT</text>
+  <text x="770" y="103" class="lane">CHALLENGE</text>
+  <text x="1160" y="103" class="lane">DECIDE</text>
+
+  <rect x="42" y="128" width="235" height="132" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="2" filter="url(#shadow)"/>
+  <text x="64" y="166" class="box-title">Control + scope</text>
+  <text x="64" y="197" class="box-copy">Rubric and criteria</text>
+  <text x="64" y="222" class="box-copy">Offering / region</text>
+  <text x="64" y="247" class="box-copy">Services / edition</text>
+
+  <path d="M277 194 H330" class="accent-arrow"/>
+
+  <rect x="332" y="128" width="195" height="132" rx="16" fill="#dbeafe" stroke="#2563eb" stroke-width="2" filter="url(#shadow)"/>
+  <text x="354" y="166" class="box-title">Doc Fetch</text>
+  <text x="354" y="197" class="box-copy">Search official sources</text>
+  <text x="354" y="222" class="box-copy">Fetch and extract</text>
+  <text x="354" y="247" class="box-copy">Build evidence bundle</text>
+
+  <path d="M527 194 H580" class="accent-arrow"/>
+
+  <rect x="582" y="128" width="165" height="132" rx="16" fill="#dcfce7" stroke="#16a34a" stroke-width="2" filter="url(#shadow)"/>
+  <text x="604" y="166" class="box-title">Assessor</text>
+  <text x="604" y="197" class="box-copy">Apply rubric</text>
+  <text x="604" y="222" class="box-copy">Cite claims</text>
+  <text x="604" y="247" class="box-copy">Propose result</text>
+
+  <path d="M747 194 H800" class="arrow"/>
+
+  <rect x="802" y="128" width="180" height="132" rx="16" fill="#f3e8ff" stroke="#7c3aed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="824" y="166" class="box-title">Skeptic</text>
+  <text x="824" y="197" class="box-copy">Independent read</text>
+  <text x="824" y="222" class="box-copy">Confirm / downgrade</text>
+  <text x="824" y="247" class="box-copy">Request research</text>
+
+  <path d="M982 194 H1035" class="arrow"/>
+
+  <rect x="1037" y="128" width="180" height="132" rx="16" fill="#f3e8ff" stroke="#7c3aed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1059" y="166" class="box-title">Consistency</text>
+  <text x="1059" y="197" class="box-copy">Check peer profiles</text>
+  <text x="1059" y="222" class="box-copy">Detect anomalies</text>
+  <text x="1059" y="247" class="box-copy">Trigger research</text>
+
+  <path d="M1217 194 H1260" class="arrow"/>
+
+  <rect x="1262" y="128" width="108" height="132" rx="16" fill="#ffedd5" stroke="#ea580c" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1281" y="166" class="box-title">Review</text>
+  <text x="1281" y="197" class="box-copy">Approve</text>
+  <text x="1281" y="222" class="box-copy">Adjust</text>
+  <text x="1281" y="247" class="box-copy">Reject</text>
+
+  <rect x="332" y="326" width="415" height="110" rx="16" fill="#fff1f2" stroke="#dc2626" stroke-width="2"/>
+  <text x="356" y="362" class="box-title">Untrusted provider content</text>
+  <text x="356" y="392" class="box-copy">Documentation, search results, HTML, and extracted text</text>
+  <text x="356" y="420" class="warning">Current gap: no prompt-injection input filter</text>
+
+  <path d="M438 326 V278 H430 V260" class="arrow"/>
+
+  <rect x="802" y="326" width="415" height="110" rx="16" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+  <text x="826" y="362" class="box-title">Triggered deep research</text>
+  <text x="826" y="392" class="box-copy">Target disputed claims / search and fetch again</text>
+  <text x="826" y="420" class="box-copy">Revisions must carry their own evidence</text>
+
+  <path d="M892 326 V282" class="feedback"/>
+  <path d="M802 382 H766 Q730 382 730 346 V286 Q730 270 714 270 H665 V260" class="feedback"/>
+
+  <rect x="42" y="488" width="1175" height="76" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="68" y="521" class="box-title">Deterministic artifacts</text>
+  <text x="68" y="549" class="box-copy">Assessment YAML / evidence URLs / prompt hashes / HTML report / usage ledger / pending review</text>
+  <path d="M1127 260 V464 Q1127 488 1103 488" class="arrow"/>
+
+  <path d="M1217 526 H1260" class="accent-arrow"/>
+  <rect x="1262" y="488" width="108" height="76" rx="16" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="1280" y="521" class="box-title">Merge</text>
+  <text x="1280" y="549" class="small">approved only</text>
+</svg>
