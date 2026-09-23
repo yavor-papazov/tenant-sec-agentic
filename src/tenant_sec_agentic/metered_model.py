@@ -33,6 +33,11 @@ def model_timeout_seconds(cfg: AssessmentConfig, role: str) -> int:
     return cfg.limits.model_timeout_seconds
 
 
+def model_retry_options() -> types.HttpRetryOptions:
+    """Disable hidden SDK retries; the metered pipeline owns retry policy."""
+    return types.HttpRetryOptions(attempts=1)
+
+
 class MeteredGemini(Gemini):
     """Native Vertex Gemini adapter with per-turn metering."""
 
@@ -78,6 +83,7 @@ class MeteredGemini(Gemini):
             http_options=types.HttpOptions(
                 timeout=model_timeout_seconds(self._cfg, self._role) * 1_000,
                 headers=self._vertex_headers(),
+                retry_options=model_retry_options(),
             ),
         )
 

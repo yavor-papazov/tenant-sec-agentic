@@ -49,6 +49,7 @@ from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.release_check_cli import profile_completeness_errors
 from tenant_sec_agentic.metered_model import (
     MeteredGemini,
+    model_retry_options,
     model_timeout_seconds,
 )
 from tenant_sec_agentic.schemas import (
@@ -295,6 +296,7 @@ def test_optional_deep_research_is_time_and_retry_bounded(tmp_path):
     assert _retry_attempts(config, "assessor") == 3
     assert model_timeout_seconds(config, "deep_research") == 120
     assert model_timeout_seconds(config, "assessor") == 300
+    assert model_retry_options().attempts == 1
     adk_config = _adk_generation_config(config)
     assert adk_config.automatic_function_calling.disable is True
 

@@ -494,25 +494,25 @@ class AssessmentPipeline(BaseAgent):
         assessor_prompt = _load_prompt("assessor.md").format(
             methodology=methodology_text
         )
-        model = _metered_model(ctx, cfg, "assessor")
-        agent = LlmAgent(
-            name="assessor_agent",
-            model=model,
-            instruction=assessor_prompt,
-            output_schema=AssessorStructured,
-            output_key="assessor_output",
-            include_contents="default",
-            generate_content_config=_adk_generation_config(cfg),
-        )
         docs = ctx.session.state.get("doc_fetch_output") or {}
         user_text = (
+            f"PROVIDER: {cfg.provider.display_name} ({cfg.provider.slug})\n"
+            f"SERVICES IN SCOPE:\n"
+            f"```json\n{json.dumps(cfg.provider.services_in_scope)}```\n"
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(docs, default=str)}```"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "assessor")
-        output = ctx.session.state.get("assessor_output")
+        output = await _generate_json(
+            ctx,
+            cfg,
+            "assessor",
+            assessor_prompt,
+            user_text,
+            AssessorStructured,
+        )
+        ctx.session.state["assessor_output"] = output
         if isinstance(output, dict) and output.get("status") == "assessed":
             fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
             ctx.session.state["assessor_output"] = _enrich_claim_bundle(
@@ -528,25 +528,24 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         skeptic_prompt = _load_prompt("skeptic.md")
-        model = _metered_model(ctx, cfg, "skeptic")
-        agent = LlmAgent(
-            name="skeptic_agent",
-            model=model,
-            instruction=skeptic_prompt,
-            output_schema=SkepticStructured,
-            output_key="skeptic_output",
-            include_contents="default",
-            generate_content_config=_adk_generation_config(cfg),
-        )
         docs = ctx.session.state.get("doc_fetch_output") or {}
         user_text = (
+            f"PROVIDER: {cfg.provider.display_name} ({cfg.provider.slug})\n"
+            f"SERVICES IN SCOPE:\n"
+            f"```json\n{json.dumps(cfg.provider.services_in_scope)}```\n"
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(docs, default=str)}```"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "skeptic")
-        independent = ctx.session.state.get("skeptic_output") or {}
+        independent = await _generate_json(
+            ctx,
+            cfg,
+            "skeptic",
+            skeptic_prompt,
+            user_text,
+            SkepticStructured,
+        )
         ctx.session.state["skeptic_output"] = _reconcile_skeptic(
             ctx.session.state.get("assessor_output") or {},
             independent,
@@ -560,27 +559,29 @@ class AssessmentPipeline(BaseAgent):
         peer_profiles: dict[str, Any],
     ) -> None:
         c_prompt = _load_prompt("consistency.md")
-        model = _metered_model(ctx, cfg, "consistency")
         cid = control_def["id"]
         peer_scores = {
             p: (data.get("controls") or {}).get(cid)
             for p, data in peer_profiles.items()
         }
         ctx.session.state["peer_control_scores"] = peer_scores
-        agent = LlmAgent(
-            name="consistency_agent",
-            model=model,
-            instruction=c_prompt,
-            output_schema=ConsistencyStructured,
-            output_key="consistency_output",
-            include_contents="default",
-            generate_content_config=_adk_generation_config(cfg),
-        )
         user_text = (
-            f"CONTROL: {cid}\nPEER SCORES JSON:\n"
+            f"CONTROL: {cid}\n"
+            f"CURRENT ASSESSOR JSON:\n"
+            f"{json.dumps(ctx.session.state.get('assessor_output') or {}, default=str)}\n"
+            f"CURRENT SKEPTIC JSON:\n"
+            f"{json.dumps(ctx.session.state.get('skeptic_output') or {}, default=str)}\n"
+            f"PEER SCORES JSON:\n"
             f"{json.dumps(peer_scores, indent=2, default=str)}"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "consistency")
+        ctx.session.state["consistency_output"] = await _generate_json(
+            ctx,
+            cfg,
+            "consistency",
+            c_prompt,
+            user_text,
+            ConsistencyStructured,
+        )
 
     async def _run_deep_research(
         self,
@@ -589,7 +590,6 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         dr_prompt = _load_prompt("deep_research.md")
-        model = _metered_model(ctx, cfg, "deep_research")
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
@@ -600,45 +600,13 @@ class AssessmentPipeline(BaseAgent):
             f"CONSISTENCY FLAGS:\n```json\n"
             f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```"
         )
-        request = LlmRequest(
-            model=cfg.model_for("deep_research").removeprefix("vertex_ai/"),
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[types.Part(text=user_text)],
-                )
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=dr_prompt,
-                max_output_tokens=cfg.limits.max_output_tokens_per_call,
-                response_mime_type="application/json",
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    disable=True,
-                ),
-            ),
-        )
-        responses = [
-            response
-            async for response in model.generate_content_async(request)
-        ]
-        if not responses:
-            raise RuntimeError("deep research model returned no response")
-        content = next(
-            (
-                response.content
-                for response in reversed(responses)
-                if response.content is not None
-            ),
-            None,
-        )
-        text = "".join(
-            str(part.text or "")
-            for part in (content.parts if content is not None else [])
-        )
-        if not text:
-            raise RuntimeError("deep research model returned no JSON")
-        output = DeepResearchStructured.model_validate_json(text).model_dump(
-            mode="json"
+        output = await _generate_json(
+            ctx,
+            cfg,
+            "deep_research",
+            dr_prompt,
+            user_text,
+            DeepResearchStructured,
         )
         ctx.session.state["deep_research_output"] = output
         revised = (
@@ -698,6 +666,77 @@ def _metered_model(
         role=role,
         control_id=str(ctx.session.state.get("current_control_id", "")),
     )
+
+
+async def _generate_json(
+    ctx: InvocationContext,
+    cfg: AssessmentConfig,
+    role: str,
+    instruction: str,
+    user_text: str,
+    schema: Any,
+) -> dict[str, Any]:
+    """Run a metered, context-isolated JSON turn without constrained decoding."""
+    model = _metered_model(ctx, cfg, role)
+    request = LlmRequest(
+        model=cfg.model_for(role).removeprefix("vertex_ai/"),
+        contents=[
+            types.Content(
+                role="user",
+                parts=[types.Part(text=user_text)],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            system_instruction=instruction,
+            max_output_tokens=cfg.limits.max_output_tokens_per_call,
+            response_mime_type="application/json",
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True,
+            ),
+        ),
+    )
+    last: BaseException | None = None
+    control_id = str(ctx.session.state.get("current_control_id", ""))
+    attempts = _retry_attempts(cfg, role)
+    for attempt in range(attempts):
+        try:
+            responses = [
+                response
+                async for response in model.generate_content_async(request)
+            ]
+            content = next(
+                (
+                    response.content
+                    for response in reversed(responses)
+                    if response.content is not None
+                ),
+                None,
+            )
+            text = "".join(
+                str(part.text or "")
+                for part in (content.parts if content is not None else [])
+            )
+            if not text:
+                raise RuntimeError(f"{role} model returned no JSON")
+            return schema.model_validate_json(text).model_dump(mode="json")
+        except Exception as exc:
+            if isinstance(exc, BudgetExceeded):
+                raise
+            if _is_definitive_auth_error(exc):
+                raise
+            last = exc
+            if attempt + 1 >= attempts:
+                break
+            consume_retry(ctx.session.state, cfg, role, control_id)
+            delay = _retry_base_delay(exc, attempt)
+            await asyncio.sleep(delay + random.uniform(0.0, 1.0))
+            logger.warning(
+                "isolated JSON retry %s after error: %s",
+                attempt + 1,
+                exc,
+            )
+    assert last is not None
+    raise last
 
 
 def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) -> str:
