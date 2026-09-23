@@ -32,6 +32,7 @@ from tenant_sec_agentic.aggregate_cli import approved_entry
 from tenant_sec_agentic.batch_cli import BudgetTracker, artifact_is_current
 from tenant_sec_agentic.review_apply_cli import apply_manifest
 from tenant_sec_agentic.review_bundle_cli import render_bundle
+from tenant_sec_agentic.release_check_cli import profile_completeness_errors
 from tenant_sec_agentic.metered_model import MeteredLiteLlm
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
@@ -508,6 +509,36 @@ def test_review_manifest_applies_explicit_decision(tmp_path):
     reviewed = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
     assert reviewed["review"]["status"] == "approved"
     assert reviewed["review"]["reviewer"] == "human:reviewer"
+
+
+def test_release_check_rejects_silent_or_untraceable_results():
+    profile = {
+        "methodology_version": "2.0",
+        "assessed_at": "2026-09-23",
+        "controls": {
+            "enc.cmk": {
+                "status": "assessed",
+                "score": 2,
+                "evidence": "Supported.",
+            }
+        },
+        "vignette": {},
+        "certifications": [],
+    }
+    errors = profile_completeness_errors(
+        profile,
+        {
+            "enc.cmk": {
+                "surface": "tenant",
+                "service_scoped": True,
+            },
+            "supply-chain.fact": {"surface": "vignette"},
+        },
+    )
+    assert "enc.cmk: assessed result has no references" in errors
+    assert any("service-scoped result must be mixed" in error for error in errors)
+    assert "vignette.legal: missing M3 block" in errors
+    assert "certifications: M3 inventory is empty" in errors
 
 
 def test_approved_unknown_survives_aggregation_without_score():
