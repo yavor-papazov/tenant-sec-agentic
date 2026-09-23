@@ -109,6 +109,12 @@ def _retry_base_delay(error: BaseException, attempt: int) -> float:
     return min(60.0, float(2**attempt))
 
 
+def _retry_attempts(cfg: AssessmentConfig, role: str) -> int:
+    if role == "deep_research":
+        return 1
+    return cfg.limits.max_retries_per_call + 1
+
+
 async def _with_retries_drain(
     agent: LlmAgent,
     ctx: InvocationContext,
@@ -117,7 +123,10 @@ async def _with_retries_drain(
 ) -> None:
     last: BaseException | None = None
     control_id = str(ctx.session.state.get("current_control_id", ""))
-    attempts = cfg.limits.max_retries_per_call + 1
+    # Deep research is optional and can fan out into several tool calls inside
+    # one SDK request. Retrying that whole request is slow, costly, and can
+    # duplicate searches. Its caller already fails open to the core assessment.
+    attempts = _retry_attempts(cfg, role)
     for i in range(attempts):
         try:
             await _drain_agent(agent, ctx)
@@ -583,7 +592,10 @@ class AssessmentPipeline(BaseAgent):
             output_key="deep_research_output",
             include_contents="default",
             generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
+                max_output_tokens=cfg.limits.max_output_tokens_per_call,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    maximum_remote_calls=3,
+                ),
             ),
         )
         user_text = (

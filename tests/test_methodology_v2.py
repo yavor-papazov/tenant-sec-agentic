@@ -30,6 +30,7 @@ from tenant_sec_agentic.pipeline import (
     _mock_assessor,
     _normalize_fetched_documents,
     _normalize_service_evidence,
+    _retry_attempts,
     _retry_base_delay,
     prompt_hashes,
 )
@@ -42,7 +43,10 @@ from tenant_sec_agentic.batch_cli import (
 from tenant_sec_agentic.review_apply_cli import apply_manifest
 from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.release_check_cli import profile_completeness_errors
-from tenant_sec_agentic.metered_model import MeteredGemini
+from tenant_sec_agentic.metered_model import (
+    MeteredGemini,
+    model_timeout_seconds,
+)
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
     ConsistencyFlag,
@@ -275,6 +279,17 @@ def test_retry_policy_waits_for_capacity_and_fails_fast_on_auth():
         RuntimeError("Reauthentication is needed")
     )
     assert not _is_definitive_auth_error(capacity)
+
+
+def test_optional_deep_research_is_time_and_retry_bounded(tmp_path):
+    config = _config(tmp_path)
+    config.limits.max_retries_per_call = 2
+    config.limits.model_timeout_seconds = 300
+
+    assert _retry_attempts(config, "deep_research") == 1
+    assert _retry_attempts(config, "assessor") == 3
+    assert model_timeout_seconds(config, "deep_research") == 120
+    assert model_timeout_seconds(config, "assessor") == 300
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
