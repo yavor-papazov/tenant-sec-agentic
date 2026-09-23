@@ -31,7 +31,7 @@ from tenant_sec_agentic.artifacts import (
     render_index_html,
 )
 from tenant_sec_agentic.config import AssessmentConfig, config_from_state, config_to_serializable
-from tenant_sec_agentic.metered_model import MeteredLiteLlm
+from tenant_sec_agentic.metered_model import MeteredGemini
 from tenant_sec_agentic.repo import load_all_controls, resolve_control_scope
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
@@ -631,8 +631,8 @@ def _metered_model(
     ctx: InvocationContext,
     cfg: AssessmentConfig,
     role: str,
-) -> MeteredLiteLlm:
-    return MeteredLiteLlm(
+) -> MeteredGemini:
+    return MeteredGemini(
         model=cfg.model_for(role),
         state=ctx.session.state,
         cfg=cfg,

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-from google.adk.models.lite_llm import LiteLlm
+from google.adk.models import Gemini
 from pydantic import ValidationError
 
 from tenant_sec_agentic.artifacts import (
@@ -40,7 +40,7 @@ from tenant_sec_agentic.batch_cli import (
 from tenant_sec_agentic.review_apply_cli import apply_manifest
 from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.release_check_cli import profile_completeness_errors
-from tenant_sec_agentic.metered_model import MeteredLiteLlm
+from tenant_sec_agentic.metered_model import MeteredGemini
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
     ConsistencyFlag,
@@ -336,21 +336,18 @@ def test_metered_model_counts_each_adk_model_turn(tmp_path, monkeypatch):
             )
         )
 
-    monkeypatch.setattr(LiteLlm, "generate_content_async", fake_generate)
-    model = MeteredLiteLlm(
+    monkeypatch.setattr(Gemini, "generate_content_async", fake_generate)
+    model = MeteredGemini(
         model=config.model_for("assessor"),
         state=state,
         cfg=config,
         role="assessor",
         control_id="iam.mfa-enforcement",
     )
-    assert model._additional_args["num_retries"] == 0
-    assert (
-        model._additional_args["headers"][
-            "X-Vertex-AI-LLM-Shared-Request-Type"
-        ]
-        == "priority"
-    )
+    assert model.model == "gemini-3.5-flash"
+    assert model._vertex_headers()[
+        "X-Vertex-AI-LLM-Shared-Request-Type"
+    ] == "priority"
 
     async def run_once():
         return [

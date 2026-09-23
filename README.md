@@ -92,16 +92,17 @@ enables Vertex AI and Cloud Billing Budgets APIs, grants the selected principal
 $15 alerting budget, and writes non-secret Vertex variables to `.env`. It does
 not create a project, link billing, or perform interactive authentication.
 
-The example uses Vertex **Priority PayGo**. Google documents this traffic class
-for agentic workflows; it provides immediate baseline throughput without a
-Provisioned Throughput commitment, at a premium over Standard PayGo. Priority
-supports the `global`, `us`, and `eu` endpoints. Set both
-`GOOGLE_CLOUD_LOCATION` and `VERTEXAI_LOCATION` to the selected endpoint; this
-pilot uses `eu` because live probes confirmed Priority traffic there while its
-global requests were downgraded to Standard capacity. Set
-`vertex_traffic_class: standard` only when lower cost matters more than
-transient 429/latency risk, and update the pricing table to the matching
-traffic-class rates.
+The example demonstrates Vertex **Priority PayGo**. Google documents this
+traffic class for agentic workflows; it provides immediate baseline throughput
+without a Provisioned Throughput commitment, at a premium over Standard PayGo.
+Priority supports the `global`, `us`, and `eu` endpoints.
+
+The RC1 provider configs use Gemini 2.5 Flash with Standard traffic on the
+`global` endpoint. Live recovery probes found repeated timeouts and malformed
+structured output from Gemini 3.5 Flash on the `eu` Priority route, while the
+global 2.5 route responded promptly. Set both `GOOGLE_CLOUD_LOCATION` and
+`VERTEXAI_LOCATION` to the selected endpoint and keep the pricing table aligned
+with the chosen model and traffic class.
 
 Use a dedicated billed project and configure its budget controls first. Cloud
 Billing budgets are normally alerts, not hard caps; the pipeline's
