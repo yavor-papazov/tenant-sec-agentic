@@ -32,6 +32,11 @@ def profile_completeness_errors(
     errors: list[str] = []
     if str(profile.get("methodology_version")) != "2.0":
         errors.append("methodology_version must be 2.0")
+    review_status = str(profile.get("review_status") or "")
+    if review_status not in {"unreviewed", "human-reviewed"}:
+        errors.append(
+            "review_status must be unreviewed or human-reviewed"
+        )
     results = profile.get("controls") or {}
     exceptions = profile.get("service_scope_exceptions") or {}
     tenant_controls = {
@@ -48,6 +53,12 @@ def profile_completeness_errors(
             entry.get("status")
             or ("assessed" if "score" in entry else "unknown")
         )
+        if status == "unknown" and review_status == "unreviewed":
+            if not str(entry.get("evidence") or "").strip():
+                errors.append(
+                    f"{control_id}: provisional unknown has no explanation"
+                )
+            continue
         if status not in {"assessed", "not_applicable"}:
             errors.append(
                 f"{control_id}: publication state {status!r} is incomplete"

@@ -31,7 +31,7 @@ from tenant_sec_agentic.pipeline import (
     _normalize_service_evidence,
     prompt_hashes,
 )
-from tenant_sec_agentic.aggregate_cli import approved_entry
+from tenant_sec_agentic.aggregate_cli import approved_entry, provisional_entry
 from tenant_sec_agentic.batch_cli import (
     BudgetTracker,
     _wait_for_process,
@@ -263,6 +263,30 @@ def test_unreferenced_service_scores_become_unknown():
     assert normalized["document-db"]["status"] == "unknown"
     assert "score" not in normalized["document-db"]
     assert normalized["kapsule"]["score"] == 2
+
+
+def test_service_names_and_separator_variants_use_configured_ids():
+    services = {
+        "Object Storage": {
+            "status": "assessed",
+            "score": 2,
+            "sources_used": ["https://example.com/object-storage"],
+        },
+        "document_db": {
+            "status": "assessed",
+            "score": 1,
+            "sources_used": ["https://example.com/document-db"],
+        },
+    }
+    normalized = _normalize_service_evidence(
+        services,
+        {"evidence_items": [], "claims": []},
+        [
+            {"id": "object-storage", "name": "Object Storage"},
+            {"id": "document-db", "name": "Document DB"},
+        ],
+    )
+    assert set(normalized) == {"object-storage", "document-db"}
 
 
 def test_canonical_entry_retains_sources_and_validates(tmp_path):
@@ -711,3 +735,43 @@ def test_approved_unknown_survives_aggregation_without_score():
     assert entry["status"] == "unknown"
     assert "score" not in entry
     assert entry["references"][0]["url"] == "https://example.com/thin"
+
+
+def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
+    assessment = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "unknown",
+        "recommended_score": None,
+        "overall_confidence": "low",
+        "prompt_hashes": prompt_hashes(),
+        "assessor": {
+            "evidence": "Official documentation was insufficient.",
+            "sources_used": ["https://example.com/thin"],
+        },
+        "review": {"status": "pending"},
+    }
+    ok, entry = provisional_entry(assessment)
+    assert ok is True
+    assert entry["status"] == "unknown"
+    assert "score" not in entry
+
+    profile = {
+        "methodology_version": "2.0",
+        "review_status": "unreviewed",
+        "assessed_at": "2026-09-23",
+        "controls": {"enc.cmk": entry},
+        "vignette": {},
+        "certifications": [],
+    }
+    errors = profile_completeness_errors(
+        profile,
+        {
+            "enc.cmk": {
+                "surface": "tenant",
+                "service_scoped": False,
+            }
+        },
+    )
+    assert not any("publication state 'unknown'" in error for error in errors)

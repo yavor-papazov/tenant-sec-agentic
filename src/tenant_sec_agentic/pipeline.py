@@ -24,6 +24,8 @@ from typing_extensions import override
 from tenant_sec_agentic import __version__
 from tenant_sec_agentic.artifacts import (
     build_assessment_yaml,
+    canonical_service_id,
+    canonicalize_service_map,
     control_entry_for_provider_schema,
     validate_control_against_provider_schema,
     validate_internal_assessment,
@@ -312,6 +314,7 @@ class AssessmentPipeline(BaseAgent):
                 rec_services = _normalize_service_evidence(
                     rec_services,
                     final_assessor,
+                    cfg.provider.services_in_scope,
                 )
                 final_assessor = dict(final_assessor)
                 final_assessor["services"] = rec_services
@@ -322,6 +325,7 @@ class AssessmentPipeline(BaseAgent):
                 final_assessor,
                 rec_services,
                 conf,
+                cfg.provider.services_in_scope,
             )
             schema_errs = validate_control_against_provider_schema(
                 repo_root,
@@ -944,8 +948,11 @@ def _normalize_fetched_documents(
 def _normalize_service_evidence(
     services: dict[str, Any],
     assessment: dict[str, Any],
+    services_in_scope: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Do not publish inferred service scores without a cited source."""
+    if services_in_scope:
+        services = canonicalize_service_map(services, services_in_scope)
     evidence_urls = {
         str(item.get("id")): str(item.get("url"))
         for item in assessment.get("evidence_items") or []
@@ -961,7 +968,12 @@ def _normalize_service_evidence(
             if str(evidence_id) in evidence_urls
         ]
         for service_id in claim.get("services") or []:
-            bucket = urls_by_service.setdefault(str(service_id), [])
+            canonical_id = (
+                canonical_service_id(str(service_id), services_in_scope)
+                if services_in_scope
+                else str(service_id)
+            )
+            bucket = urls_by_service.setdefault(canonical_id, [])
             bucket.extend(url for url in urls if url not in bucket)
 
     normalized: dict[str, Any] = {}

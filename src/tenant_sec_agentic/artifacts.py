@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,51 @@ from jsonschema import FormatChecker
 from tenant_sec_agentic import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def canonical_service_id(
+    value: str,
+    services_in_scope: list[dict[str, Any]],
+) -> str:
+    """Resolve a model-produced service ID/name to the configured service ID."""
+    raw = str(value).strip()
+    configured_ids = {
+        str(service.get("id") or "") for service in services_in_scope
+    }
+    if raw in configured_ids:
+        return raw
+
+    def normalized(text: str) -> str:
+        return "-".join(
+            part for part in re.split(r"[^a-z0-9]+", text.casefold()) if part
+        )
+
+    aliases: dict[str, set[str]] = {}
+    for service in services_in_scope:
+        service_id = str(service.get("id") or "")
+        if not service_id:
+            continue
+        for alias in (service_id, str(service.get("name") or "")):
+            if alias:
+                aliases.setdefault(normalized(alias), set()).add(service_id)
+    matches = aliases.get(normalized(raw), set())
+    return next(iter(matches)) if len(matches) == 1 else raw
+
+
+def canonicalize_service_map(
+    services: dict[str, Any],
+    services_in_scope: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Canonicalize service keys and reject conflicting aliases."""
+    result: dict[str, Any] = {}
+    for raw_id, value in services.items():
+        service_id = canonical_service_id(str(raw_id), services_in_scope)
+        if service_id in result and result[service_id] != value:
+            raise ValueError(
+                f"Conflicting service aliases resolve to {service_id!r}"
+            )
+        result[service_id] = value
+    return result
 
 
 def _esc(s: str) -> str:
@@ -128,6 +174,7 @@ def control_entry_for_provider_schema(
     assessor: dict[str, Any],
     recommended_services: dict[str, Any] | None,
     overall_confidence: str,
+    services_in_scope: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Single control block for provider.schema.json."""
     verified = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -147,6 +194,12 @@ def control_entry_for_provider_schema(
     if recommended_score == "mixed":
         services_out: dict[str, Any] = {}
         src = assessor.get("services") or {}
+        if services_in_scope:
+            src = canonicalize_service_map(src, services_in_scope)
+            recommended_services = canonicalize_service_map(
+                recommended_services or {},
+                services_in_scope,
+            )
         for sid, recommended in (recommended_services or {}).items():
             source_service = src.get(sid) if isinstance(src.get(sid), dict) else {}
             value = (
@@ -243,6 +296,7 @@ def validate_control_against_provider_schema(
         "assessed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "methodology_version": "2.0",
         "revision": 1,
+        "review_status": "unreviewed",
         "offering": offering,
         "services_in_scope": services_in_scope,
         "controls": {control_id: control_entry},
