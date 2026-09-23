@@ -301,10 +301,19 @@ async def _run_provider(
     provider_semaphore: asyncio.Semaphore,
     control_parallelism: int,
     timeout_seconds: float,
+    selected_controls: list[str] | None,
 ) -> dict[str, list[str]]:
     cfg = load_assessment_config(config_path)
     controls = load_all_controls(cfg.paths.repo_root)
     scope = resolve_control_scope(cfg.controls_scope, controls)
+    if selected_controls:
+        missing = sorted(set(selected_controls) - set(scope))
+        if missing:
+            raise ValueError(
+                f"{cfg.provider.slug}: controls outside configured scope: "
+                + ", ".join(missing)
+            )
+        scope = [control_id for control_id in scope if control_id in selected_controls]
     completed: list[str] = []
     failed: list[str] = []
     control_semaphore = asyncio.Semaphore(control_parallelism)
@@ -349,6 +358,7 @@ async def _run(args: argparse.Namespace) -> int:
                 semaphore,
                 args.control_parallelism,
                 args.control_timeout_minutes * 60,
+                args.controls,
             )
             for path in configs
         ]
@@ -393,6 +403,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--provider-parallelism", type=int, default=4)
     parser.add_argument("--control-parallelism", type=int, default=2)
     parser.add_argument("--control-timeout-minutes", type=float, default=15)
+    parser.add_argument(
+        "--controls",
+        nargs="+",
+        default=None,
+        help="Run only these exact in-scope control IDs",
+    )
     args = parser.parse_args(argv)
     if args.budget_usd <= 0:
         parser.error("--budget-usd must be positive")
