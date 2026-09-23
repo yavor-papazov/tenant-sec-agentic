@@ -99,6 +99,7 @@ class BudgetTracker:
         *,
         status: str,
         actual_model_cost_usd: float | None,
+        model_charge_usd: float | None = None,
         tavily_max_cost_usd: float | None,
         exit_code: int,
         artifact_current: bool,
@@ -108,18 +109,24 @@ class BudgetTracker:
             run = next(
                 value for value in self.data["runs"] if value["id"] == run_id
             )
+            model_charge = (
+                actual_model_cost_usd
+                if model_charge_usd is None
+                else model_charge_usd
+            )
             if (
-                actual_model_cost_usd is not None
+                model_charge is not None
                 and tavily_max_cost_usd is not None
             ):
                 run["charged_cost_usd"] = (
-                    actual_model_cost_usd + tavily_max_cost_usd
+                    model_charge + tavily_max_cost_usd
                 )
             run.update(
                 {
                     "status": status,
                     "finished_at": datetime.now(timezone.utc).isoformat(),
                     "actual_model_cost_usd": actual_model_cost_usd,
+                    "model_charge_usd": model_charge,
                     "tavily_max_cost_usd": tavily_max_cost_usd,
                     "exit_code": exit_code,
                     "artifact_current": artifact_current,
@@ -266,6 +273,12 @@ async def _run_control(
     model_cost = (
         float(totals.get("actual_cost_usd", 0.0)) if usage else None
     )
+    model_charge = model_cost
+    if usage and int(totals.get("unmetered_model_calls", 0)) > 0:
+        model_charge = max(
+            model_cost or 0.0,
+            float(totals.get("projected_cost_usd", 0.0)),
+        )
     tavily_cost = (
         float(totals.get("tavily_projected_cost_usd", 0.0))
         if usage
@@ -275,6 +288,7 @@ async def _run_control(
         run_id,
         status="completed" if current else "failed",
         actual_model_cost_usd=model_cost,
+        model_charge_usd=model_charge,
         tavily_max_cost_usd=tavily_cost,
         exit_code=exit_code,
         artifact_current=current,
@@ -327,6 +341,7 @@ async def _run_provider(
     max_attempts: int,
     provider_semaphore: asyncio.Semaphore,
     control_parallelism: int,
+    assessment_semaphore: asyncio.Semaphore,
     timeout_seconds: float,
     selected_controls: list[str] | None,
 ) -> dict[str, list[str]]:
@@ -345,14 +360,15 @@ async def _run_provider(
         async with control_semaphore:
             ready: bool | None = False
             for attempt in range(1, max_attempts + 1):
-                ready = await _run_control(
-                    config_path,
-                    cfg,
-                    control_id,
-                    attempt,
-                    tracker,
-                    timeout_seconds,
-                )
+                async with assessment_semaphore:
+                    ready = await _run_control(
+                        config_path,
+                        cfg,
+                        control_id,
+                        attempt,
+                        tracker,
+                        timeout_seconds,
+                    )
                 if ready is True or ready is None:
                     break
             return control_id, ready is True
@@ -368,8 +384,15 @@ async def _run_provider(
 
 async def _run(args: argparse.Namespace) -> int:
     configs = [path.resolve() for path in args.config]
+    loaded_configs = [load_assessment_config(path) for path in configs]
     tracker = BudgetTracker(args.ledger.resolve(), args.budget_usd)
     semaphore = asyncio.Semaphore(args.provider_parallelism)
+    assessment_semaphore = asyncio.Semaphore(
+        min(
+            config.limits.max_parallel_assessments
+            for config in loaded_configs
+        )
+    )
     results = await asyncio.gather(
         *[
             _run_provider(
@@ -378,6 +401,7 @@ async def _run(args: argparse.Namespace) -> int:
                 args.max_attempts,
                 semaphore,
                 args.control_parallelism,
+                assessment_semaphore,
                 args.control_timeout_minutes * 60,
                 args.controls,
             )

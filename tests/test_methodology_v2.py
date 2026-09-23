@@ -531,6 +531,37 @@ def test_batch_budget_reservations_fail_closed(tmp_path):
     assert tracker.charged_usd == pytest.approx(5.0)
 
 
+def test_batch_budget_keeps_unmetered_model_charge(tmp_path):
+    tracker = BudgetTracker(tmp_path / "release-ledger.json", 5.0)
+
+    async def exercise():
+        run_id = await tracker.reserve(
+            provider="aws",
+            control="compute.image-management",
+            attempt=1,
+            amount_usd=4.0,
+        )
+        assert run_id is not None
+        await tracker.finalize(
+            run_id,
+            status="failed",
+            actual_model_cost_usd=0.1,
+            model_charge_usd=1.25,
+            tavily_max_cost_usd=0.02,
+            exit_code=1,
+            artifact_current=False,
+            log_path=tmp_path / "run.log",
+        )
+
+    import asyncio
+
+    asyncio.run(exercise())
+    assert tracker.charged_usd == pytest.approx(1.27)
+    run = tracker.data["runs"][0]
+    assert run["actual_model_cost_usd"] == pytest.approx(0.1)
+    assert run["model_charge_usd"] == pytest.approx(1.25)
+
+
 def test_batch_process_watchdog_kills_hung_child():
     class FakeProcess:
         def __init__(self):
