@@ -83,6 +83,19 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
+def _doc_fetch_generation_config(
+    cfg: AssessmentConfig,
+) -> types.GenerateContentConfig:
+    # ADK owns the function-call loop. Disabling the GenAI SDK's second AFC
+    # loop prevents duplicate remote calls and deadline stalls.
+    return types.GenerateContentConfig(
+        max_output_tokens=cfg.limits.max_output_tokens_per_call,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+            disable=True,
+        ),
+    )
+
+
 async def _drain_agent(agent: LlmAgent, ctx: InvocationContext) -> None:
     async for event in agent.run_async(ctx):
         # Runner normally persists yielded events. These role agents are
@@ -459,9 +472,7 @@ class AssessmentPipeline(BaseAgent):
             output_schema=DocFetchStructured,
             output_key="doc_fetch_output",
             include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
+            generate_content_config=_doc_fetch_generation_config(cfg),
         )
         user_text = _user_block_doc_fetch(cfg, control_def)
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "doc_fetch")
