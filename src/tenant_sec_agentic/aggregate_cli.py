@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
             else "human-reviewed"
         ),
         "review_note": (
-            "1.0-RC1 recommendations are AI-assisted and have not completed "
+            "These AI-assisted provisional recommendations have not completed "
             "human review."
             if args.provisional_unreviewed
             else "All published recommendations completed human review."
