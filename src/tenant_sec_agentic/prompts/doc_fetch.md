@@ -17,7 +17,9 @@ STRICT TOOL BUDGET:
 
 INSTRUCTIONS:
 1. Search the provider's documentation site for content related to this
-   control. Prefer the docs base URL domain in your queries.
+   control. Prefer the docs base URL domain in your queries. If DOCS_BASE_URL
+   lists multiple official roots, use the two search calls across those roots
+   instead of treating only the first host as authoritative.
 2. Focus on TECHNICAL documentation: API references, configuration guides,
    architecture documents, CLI references. NOT marketing pages or press releases.
 3. For service-scoped controls, cover all in-scope services in the combined

@@ -18,6 +18,7 @@ from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
+from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 from typing_extensions import override
 
@@ -82,6 +83,20 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
+def _adk_generation_config(
+    cfg: AssessmentConfig,
+) -> types.GenerateContentConfig:
+    # ADK owns function-call orchestration and conversation branching.
+    # Disabling the GenAI SDK's second AFC loop prevents inherited tool
+    # history from causing duplicate remote calls and deadline stalls.
+    return types.GenerateContentConfig(
+        max_output_tokens=cfg.limits.max_output_tokens_per_call,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+            disable=True,
+        ),
+    )
+
+
 async def _drain_agent(agent: LlmAgent, ctx: InvocationContext) -> None:
     async for event in agent.run_async(ctx):
         # Runner normally persists yielded events. These role agents are
@@ -93,6 +108,28 @@ async def _drain_agent(agent: LlmAgent, ctx: InvocationContext) -> None:
         )
 
 
+def _is_definitive_auth_error(error: BaseException) -> bool:
+    message = str(error).lower()
+    return (
+        "reauthentication is needed" in message
+        or "invalid_grant" in message
+        or "application default credentials are not available" in message
+    )
+
+
+def _retry_base_delay(error: BaseException, attempt: int) -> float:
+    message = str(error).lower()
+    if "resource_exhausted" in message or "429" in message:
+        return min(120.0, 30.0 * float(2**attempt))
+    return min(60.0, float(2**attempt))
+
+
+def _retry_attempts(cfg: AssessmentConfig, role: str) -> int:
+    if role == "deep_research":
+        return 1
+    return cfg.limits.max_retries_per_call + 1
+
+
 async def _with_retries_drain(
     agent: LlmAgent,
     ctx: InvocationContext,
@@ -101,7 +138,10 @@ async def _with_retries_drain(
 ) -> None:
     last: BaseException | None = None
     control_id = str(ctx.session.state.get("current_control_id", ""))
-    attempts = cfg.limits.max_retries_per_call + 1
+    # Deep research is optional and can fan out into several tool calls inside
+    # one SDK request. Retrying that whole request is slow, costly, and can
+    # duplicate searches. Its caller already fails open to the core assessment.
+    attempts = _retry_attempts(cfg, role)
     for i in range(attempts):
         try:
             await _drain_agent(agent, ctx)
@@ -109,11 +149,13 @@ async def _with_retries_drain(
         except Exception as e:
             if isinstance(e, BudgetExceeded):
                 raise
+            if _is_definitive_auth_error(e):
+                raise
             last = e
             if i + 1 >= attempts:
                 break
             consume_retry(ctx.session.state, cfg, role, control_id)
-            base_delay = min(60.0, float(2**i))
+            base_delay = _retry_base_delay(e, i)
             await asyncio.sleep(base_delay + random.uniform(0.0, 1.0))
             logger.warning("LLM/API retry %s after error: %s", i + 1, e)
     assert last is not None
@@ -431,9 +473,7 @@ class AssessmentPipeline(BaseAgent):
             output_schema=DocFetchStructured,
             output_key="doc_fetch_output",
             include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
+            generate_content_config=_adk_generation_config(cfg),
         )
         user_text = _user_block_doc_fetch(cfg, control_def)
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "doc_fetch")
@@ -454,34 +494,39 @@ class AssessmentPipeline(BaseAgent):
         assessor_prompt = _load_prompt("assessor.md").format(
             methodology=methodology_text
         )
-        model = _metered_model(ctx, cfg, "assessor")
-        agent = LlmAgent(
-            name="assessor_agent",
-            model=model,
-            instruction=assessor_prompt,
-            output_schema=AssessorStructured,
-            output_key="assessor_output",
-            include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
-        )
         docs = ctx.session.state.get("doc_fetch_output") or {}
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
         user_text = (
+            f"PROVIDER: {cfg.provider.display_name} ({cfg.provider.slug})\n"
+            f"SERVICES IN SCOPE:\n"
+            f"```json\n{json.dumps(cfg.provider.services_in_scope)}```\n"
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
-            f"{json.dumps(docs, default=str)}```"
+            f"{json.dumps(docs, default=str)}```\n"
+            "FETCHED SOURCE URLS (the only URLs valid as evidence):\n"
+            f"```json\n{json.dumps(sorted(fetched))}```"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "assessor")
-        output = ctx.session.state.get("assessor_output")
+        output = await _generate_json(
+            ctx,
+            cfg,
+            "assessor",
+            assessor_prompt,
+            user_text,
+            AssessorStructured,
+        )
+        ctx.session.state["assessor_output"] = output
         if isinstance(output, dict) and output.get("status") == "assessed":
-            fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-            ctx.session.state["assessor_output"] = _enrich_claim_bundle(
-                output,
-                cfg,
-                fetched,
-            )
+            try:
+                output = _enrich_claim_bundle(output, cfg, fetched)
+            except RuntimeError as exc:
+                logger.warning(
+                    "downgrading unverifiable assessor output for %s: %s",
+                    control_def.get("id"),
+                    exc,
+                )
+                output = _downgrade_unverifiable_claims(output, str(exc))
+            ctx.session.state["assessor_output"] = output
 
     async def _run_skeptic(
         self,
@@ -490,27 +535,24 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         skeptic_prompt = _load_prompt("skeptic.md")
-        model = _metered_model(ctx, cfg, "skeptic")
-        agent = LlmAgent(
-            name="skeptic_agent",
-            model=model,
-            instruction=skeptic_prompt,
-            output_schema=SkepticStructured,
-            output_key="skeptic_output",
-            include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
-        )
         docs = ctx.session.state.get("doc_fetch_output") or {}
         user_text = (
+            f"PROVIDER: {cfg.provider.display_name} ({cfg.provider.slug})\n"
+            f"SERVICES IN SCOPE:\n"
+            f"```json\n{json.dumps(cfg.provider.services_in_scope)}```\n"
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(docs, default=str)}```"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "skeptic")
-        independent = ctx.session.state.get("skeptic_output") or {}
+        independent = await _generate_json(
+            ctx,
+            cfg,
+            "skeptic",
+            skeptic_prompt,
+            user_text,
+            SkepticStructured,
+        )
         ctx.session.state["skeptic_output"] = _reconcile_skeptic(
             ctx.session.state.get("assessor_output") or {},
             independent,
@@ -524,29 +566,29 @@ class AssessmentPipeline(BaseAgent):
         peer_profiles: dict[str, Any],
     ) -> None:
         c_prompt = _load_prompt("consistency.md")
-        model = _metered_model(ctx, cfg, "consistency")
         cid = control_def["id"]
         peer_scores = {
             p: (data.get("controls") or {}).get(cid)
             for p, data in peer_profiles.items()
         }
         ctx.session.state["peer_control_scores"] = peer_scores
-        agent = LlmAgent(
-            name="consistency_agent",
-            model=model,
-            instruction=c_prompt,
-            output_schema=ConsistencyStructured,
-            output_key="consistency_output",
-            include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
-        )
         user_text = (
-            f"CONTROL: {cid}\nPEER SCORES JSON:\n"
+            f"CONTROL: {cid}\n"
+            f"CURRENT ASSESSOR JSON:\n"
+            f"{json.dumps(ctx.session.state.get('assessor_output') or {}, default=str)}\n"
+            f"CURRENT SKEPTIC JSON:\n"
+            f"{json.dumps(ctx.session.state.get('skeptic_output') or {}, default=str)}\n"
+            f"PEER SCORES JSON:\n"
             f"{json.dumps(peer_scores, indent=2, default=str)}"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "consistency")
+        ctx.session.state["consistency_output"] = await _generate_json(
+            ctx,
+            cfg,
+            "consistency",
+            c_prompt,
+            user_text,
+            ConsistencyStructured,
+        )
 
     async def _run_deep_research(
         self,
@@ -555,19 +597,6 @@ class AssessmentPipeline(BaseAgent):
         control_def: dict[str, Any],
     ) -> None:
         dr_prompt = _load_prompt("deep_research.md")
-        model = _metered_model(ctx, cfg, "deep_research")
-        agent = LlmAgent(
-            name="deep_research_agent",
-            model=model,
-            instruction=dr_prompt,
-            tools=doc_fetch_tools(),
-            output_schema=DeepResearchStructured,
-            output_key="deep_research_output",
-            include_contents="default",
-            generate_content_config=types.GenerateContentConfig(
-                max_output_tokens=cfg.limits.max_output_tokens_per_call
-            ),
-        )
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
@@ -578,14 +607,15 @@ class AssessmentPipeline(BaseAgent):
             f"CONSISTENCY FLAGS:\n```json\n"
             f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```"
         )
-        await _inject_user_and_drain(
-            agent,
+        output = await _generate_json(
             ctx,
-            user_text,
             cfg,
             "deep_research",
+            dr_prompt,
+            user_text,
+            DeepResearchStructured,
         )
-        output = ctx.session.state.get("deep_research_output")
+        ctx.session.state["deep_research_output"] = output
         revised = (
             output.get("revised_assessment")
             if isinstance(output, dict)
@@ -593,11 +623,22 @@ class AssessmentPipeline(BaseAgent):
         )
         if isinstance(revised, dict) and revised.get("status") == "assessed":
             fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-            output["revised_assessment"] = _enrich_claim_bundle(
-                revised,
-                cfg,
-                fetched,
-            )
+            try:
+                output["revised_assessment"] = _enrich_claim_bundle(
+                    revised,
+                    cfg,
+                    fetched,
+                )
+            except RuntimeError as exc:
+                logger.warning(
+                    "discarding unverifiable deep-research revision for %s: %s",
+                    control_def.get("id"),
+                    exc,
+                )
+                output["revised_assessment"] = None
+                unresolved = list(output.get("unresolved") or [])
+                unresolved.append(f"Unverifiable revised evidence: {exc}")
+                output["unresolved"] = unresolved
             ctx.session.state["deep_research_output"] = output
 
 
@@ -643,6 +684,86 @@ def _metered_model(
         role=role,
         control_id=str(ctx.session.state.get("current_control_id", "")),
     )
+
+
+async def _generate_json(
+    ctx: InvocationContext,
+    cfg: AssessmentConfig,
+    role: str,
+    instruction: str,
+    user_text: str,
+    schema: Any,
+) -> dict[str, Any]:
+    """Run a metered, context-isolated JSON turn without constrained decoding."""
+    model = _metered_model(ctx, cfg, role)
+    schema_json = json.dumps(
+        schema.model_json_schema(),
+        separators=(",", ":"),
+    )
+    request = LlmRequest(
+        model=cfg.model_for(role).removeprefix("vertex_ai/"),
+        contents=[
+            types.Content(
+                role="user",
+                parts=[types.Part(text=user_text)],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                f"{instruction}\n\n"
+                "Return exactly one JSON object matching this schema. "
+                "Use the field names and value types exactly; do not add "
+                f"properties:\n{schema_json}"
+            ),
+            max_output_tokens=cfg.limits.max_output_tokens_per_call,
+            response_mime_type="application/json",
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=True,
+            ),
+        ),
+    )
+    last: BaseException | None = None
+    control_id = str(ctx.session.state.get("current_control_id", ""))
+    attempts = _retry_attempts(cfg, role)
+    for attempt in range(attempts):
+        try:
+            responses = [
+                response
+                async for response in model.generate_content_async(request)
+            ]
+            content = next(
+                (
+                    response.content
+                    for response in reversed(responses)
+                    if response.content is not None
+                ),
+                None,
+            )
+            text = "".join(
+                str(part.text or "")
+                for part in (content.parts if content is not None else [])
+            )
+            if not text:
+                raise RuntimeError(f"{role} model returned no JSON")
+            return schema.model_validate_json(text).model_dump(mode="json")
+        except Exception as exc:
+            if isinstance(exc, BudgetExceeded):
+                raise
+            if _is_definitive_auth_error(exc):
+                raise
+            last = exc
+            if attempt + 1 >= attempts:
+                break
+            consume_retry(ctx.session.state, cfg, role, control_id)
+            delay = _retry_base_delay(exc, attempt)
+            await asyncio.sleep(delay + random.uniform(0.0, 1.0))
+            logger.warning(
+                "isolated JSON retry %s after error: %s",
+                attempt + 1,
+                exc,
+            )
+    assert last is not None
+    raise last
 
 
 def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) -> str:
@@ -766,6 +887,50 @@ def _enrich_claim_bundle(
     return enriched
 
 
+def _downgrade_unverifiable_claims(
+    assessor: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    """Fail closed when a model cites a source that was not fetched."""
+    downgraded = dict(assessor)
+    explanation = (
+        "No score was retained because the generated claim chain referenced "
+        f"unverified evidence ({reason})."
+    )
+    services: dict[str, dict[str, Any]] = {}
+    for service_id, raw in (assessor.get("services") or {}).items():
+        value = dict(raw) if isinstance(raw, dict) else {}
+        value.update(
+            {
+                "status": "unknown",
+                "score": None,
+                "evidence": explanation,
+                "confidence": "low",
+                "sources_used": [],
+            }
+        )
+        services[str(service_id)] = value
+    downgraded.update(
+        {
+            "status": "unknown",
+            "score": None,
+            "services": services,
+            "evidence": explanation,
+            "confidence": "low",
+            "flags": [
+                *list(assessor.get("flags") or []),
+                "unverified-evidence-reference",
+            ],
+            "deep_research_recommended": True,
+            "sources_used": [],
+            "evidence_items": [],
+            "claims": [],
+            "criteria_results": [],
+        }
+    )
+    return downgraded
+
+
 def _match_fetched_document(
     url: str,
     fetched_documents: dict[str, Any],
@@ -863,10 +1028,25 @@ def final_recommendation(
     conf = str(assessor.get("confidence") or "low")
 
     revised = (deep or {}).get("revised_assessment")
-    if isinstance(revised, dict) and revised.get("status"):
+    unresolved = list((deep or {}).get("unresolved") or [])
+    if (
+        isinstance(revised, dict)
+        and revised.get("status")
+        and not unresolved
+    ):
         status = str(revised["status"])
         score = revised.get("score")
-        services = revised.get("services") if score == "mixed" else None
+        services = (
+            _preserve_unknown_service_zeros(
+                assessor.get("services") or {},
+                revised.get("services") or {},
+            )
+            if score == "mixed"
+            else None
+        )
+        if score == "mixed":
+            revised = dict(revised)
+            revised["services"] = services
         return (
             status,
             score,
@@ -878,8 +1058,17 @@ def final_recommendation(
     if skeptic and skeptic.get("verdict") == "downgrade":
         status = str(skeptic.get("recommended_status") or "unknown")
         score = skeptic.get("recommended_score")
+        recommended_services = _preserve_unknown_service_zeros(
+            assessor.get("services") or {},
+            skeptic.get("recommended_services") or {},
+        )
+        if assessor.get("score") == "mixed" and recommended_services:
+            # A challenger may lower every evidenced service while still
+            # returning a scalar overall score. Preserve service variation
+            # instead of collapsing a service-scoped assessment to one leaf.
+            score = "mixed"
         services = (
-            skeptic.get("recommended_services")
+            recommended_services
             if score == "mixed"
             else None
         )
@@ -923,6 +1112,27 @@ def final_recommendation(
     score = assessor.get("score")
     services = assessor.get("services") if score == "mixed" else None
     return status, score, services, conf, assessor
+
+
+def _preserve_unknown_service_zeros(
+    original: dict[str, Any],
+    proposed: dict[str, Any],
+) -> dict[str, Any]:
+    """Do not turn missing evidence into an unsupported L0 downgrade."""
+    guarded = {
+        service_id: dict(service)
+        for service_id, service in proposed.items()
+    }
+    for service_id, service in list(guarded.items()):
+        prior = original.get(service_id)
+        if (
+            isinstance(prior, dict)
+            and prior.get("status") != "assessed"
+            and service.get("status") == "assessed"
+            and service.get("score") == 0
+        ):
+            guarded[service_id] = dict(prior)
+    return guarded
 
 
 def _normalize_fetched_documents(

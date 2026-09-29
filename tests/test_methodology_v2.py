@@ -1,9 +1,11 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 from google.adk.models import Gemini
+from google.genai import types
 from pydantic import ValidationError
 
 from tenant_sec_agentic.artifacts import (
@@ -21,14 +23,20 @@ from tenant_sec_agentic.config import (
     load_assessment_config,
 )
 from tenant_sec_agentic.pipeline import (
+    AssessmentPipeline,
+    _adk_generation_config,
     _canonical_evidence_url,
+    _downgrade_unverifiable_claims,
     _drain_agent,
     _enrich_claim_bundle,
     final_recommendation,
+    _is_definitive_auth_error,
     _load_stage_checkpoint,
     _mock_assessor,
     _normalize_fetched_documents,
     _normalize_service_evidence,
+    _retry_attempts,
+    _retry_base_delay,
     prompt_hashes,
 )
 from tenant_sec_agentic.aggregate_cli import approved_entry, provisional_entry
@@ -40,10 +48,15 @@ from tenant_sec_agentic.batch_cli import (
 from tenant_sec_agentic.review_apply_cli import apply_manifest
 from tenant_sec_agentic.review_bundle_cli import render_bundle
 from tenant_sec_agentic.release_check_cli import profile_completeness_errors
-from tenant_sec_agentic.metered_model import MeteredGemini
+from tenant_sec_agentic.metered_model import (
+    MeteredGemini,
+    model_retry_options,
+    model_timeout_seconds,
+)
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
     ConsistencyFlag,
+    DeepResearchStructured,
     SkepticStructured,
 )
 from tenant_sec_agentic.usage import (
@@ -203,6 +216,191 @@ def test_challenger_downgrade_preserves_claim_traceability():
         "https://example.com/docs/limits",
     ]
     assert final["criteria_results"][2]["met"] is False
+
+
+def test_challenger_downgrade_preserves_mixed_service_scope():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "object-storage": {
+                "status": "assessed",
+                "score": 2,
+                "evidence": "SSE-C is documented.",
+                "confidence": "high",
+                "sources_used": ["https://example.com/object-storage"],
+            },
+            "block-storage": {
+                "status": "assessed",
+                "score": 0,
+                "evidence": "No docs, so challenger guessed L0.",
+                "confidence": "low",
+                "sources_used": [],
+            },
+        },
+        "evidence": "Capabilities vary by service.",
+        "confidence": "high",
+        "sources_used": ["https://example.com/object-storage"],
+        **_claims(),
+    }
+    skeptic = {
+        "verdict": "downgrade",
+        "recommended_status": "assessed",
+        "recommended_score": 0,
+        "recommended_services": {
+            "object-storage": {
+                "status": "assessed",
+                "score": 0,
+                "evidence": "SSE-C is not a provider KMS integration.",
+                "confidence": "high",
+                "sources_used": ["https://example.com/object-storage"],
+            },
+            "block-storage": {
+                "status": "unknown",
+                "evidence": "No decisive documentation.",
+                "confidence": "low",
+                "sources_used": [],
+            },
+        },
+        "reasoning": "The evidenced service does not meet the CMK definition.",
+    }
+    status, score, services, _, final = final_recommendation(
+        assessor,
+        skeptic,
+        None,
+    )
+    assert status == "assessed"
+    assert score == "mixed"
+    assert services is not None
+    assert services["object-storage"]["score"] == 0
+    assert services["block-storage"]["status"] == "unknown"
+    assert final["score"] == "mixed"
+
+
+def test_unresolved_deep_revision_does_not_override_assessor():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "managed-kubernetes-service": {
+                "status": "unknown",
+                "score": None,
+                "evidence": "Managed control-plane support is not documented.",
+                "confidence": "low",
+                "sources_used": [],
+            }
+        },
+        "evidence": "Evidence remains incomplete.",
+        "confidence": "low",
+        "sources_used": [],
+        **_claims(),
+    }
+    deep = {
+        "revised_assessment": {
+            "status": "assessed",
+            "score": 0,
+            "services": {},
+            "confidence": "high",
+        },
+        "unresolved": ["Managed control-plane support remains unresolved."],
+    }
+
+    status, score, services, confidence, final = final_recommendation(
+        assessor,
+        None,
+        deep,
+    )
+
+    assert (status, score, confidence) == ("assessed", "mixed", "low")
+    assert services["managed-kubernetes-service"]["status"] == "unknown"
+    assert final == assessor
+
+
+def test_retry_policy_waits_for_capacity_and_fails_fast_on_auth():
+    capacity = RuntimeError("429 RESOURCE_EXHAUSTED")
+    assert _retry_base_delay(capacity, 0) == 30.0
+    assert _retry_base_delay(capacity, 1) == 60.0
+    assert _retry_base_delay(capacity, 2) == 120.0
+    assert _retry_base_delay(RuntimeError("temporary 500"), 2) == 4.0
+    assert _is_definitive_auth_error(
+        RuntimeError("Reauthentication is needed")
+    )
+    assert not _is_definitive_auth_error(capacity)
+
+
+def test_optional_deep_research_is_time_and_retry_bounded(tmp_path):
+    config = _config(tmp_path)
+    config.limits.max_retries_per_call = 2
+    config.limits.model_timeout_seconds = 300
+
+    assert _retry_attempts(config, "deep_research") == 1
+    assert _retry_attempts(config, "assessor") == 3
+    assert model_timeout_seconds(config, "deep_research") == 120
+    assert model_timeout_seconds(config, "assessor") == 300
+    assert model_retry_options().attempts == 1
+    adk_config = _adk_generation_config(config)
+    assert adk_config.automatic_function_calling.disable is True
+
+
+def test_deep_research_uses_one_tool_free_structured_request(
+    tmp_path, monkeypatch
+):
+    captured = {}
+
+    class FakeModel:
+        async def generate_content_async(self, request):
+            captured["request"] = request
+            yield SimpleNamespace(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=(
+                                '{"questions_investigated": [], '
+                                '"revised_assessment": null, '
+                                '"unresolved": ["insufficient evidence"]}'
+                            )
+                        )
+                    ],
+                )
+            )
+            yield SimpleNamespace(content=None)
+
+    monkeypatch.setattr(
+        "tenant_sec_agentic.pipeline._metered_model",
+        lambda *_args, **_kwargs: FakeModel(),
+    )
+    config = _config(tmp_path)
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(
+            state={
+                "doc_fetch_output": {"docs_fetched": []},
+                "skeptic_output": {},
+                "consistency_output": {},
+            }
+        )
+    )
+
+    asyncio.run(
+        AssessmentPipeline._run_deep_research(
+            SimpleNamespace(),
+            ctx,
+            config,
+            {"id": "enc.cmk"},
+        )
+    )
+
+    request = captured["request"]
+    assert request.model == "gemini-3.5-flash"
+    assert request.config.tools is None
+    assert request.config.automatic_function_calling.disable is True
+    assert request.config.response_schema is None
+    assert "questions_investigated" in str(
+        request.config.system_instruction
+    )
+    assert ctx.session.state["deep_research_output"]["unresolved"] == [
+        "insufficient evidence"
+    ]
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
@@ -471,6 +669,43 @@ def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
     item = enriched["evidence_items"][0]
     assert item["content_hash"].startswith("sha256:")
     assert item["applicability"]["offering"] == "public"
+
+
+def test_unverifiable_claims_fail_closed_as_unknown():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "object-storage": {
+                "status": "assessed",
+                "score": 2,
+                "evidence": "Generated evidence.",
+                "confidence": "medium",
+                "sources_used": ["https://unfetched.example/doc"],
+            }
+        },
+        "evidence": "Generated evidence.",
+        "confidence": "medium",
+        "flags": [],
+        "deep_research_recommended": False,
+        "sources_used": ["https://unfetched.example/doc"],
+        **_claims(),
+    }
+
+    downgraded = _downgrade_unverifiable_claims(
+        assessor,
+        "claim evidence URL was not fetched",
+    )
+
+    validated = AssessorStructured.model_validate(downgraded)
+    assert validated.status == "unknown"
+    assert validated.score is None
+    assert validated.services["object-storage"].status == "unknown"
+    assert validated.services["object-storage"].score is None
+    assert validated.evidence_items == []
+    assert validated.claims == []
+    assert validated.criteria_results == []
+    assert validated.deep_research_recommended is True
 
 
 def test_batch_runner_recognizes_current_review_artifact(tmp_path):
@@ -775,3 +1010,54 @@ def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
         },
     )
     assert not any("publication state 'unknown'" in error for error in errors)
+
+
+def test_provisional_aggregation_uses_deep_research_revision():
+    revised = {
+        "status": "assessed",
+        "score": 1,
+        "services": {},
+        "evidence": "Deep research found an architecture-level capability.",
+        "confidence": "high",
+        "flags": [],
+        "deep_research_recommended": False,
+        "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
+    }
+    assessment = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "assessed",
+        "recommended_score": 1,
+        "recommended_services": None,
+        "overall_confidence": "high",
+        "prompt_hashes": prompt_hashes(),
+        "assessor": {
+            "status": "unknown",
+            "score": None,
+            "services": {},
+            "evidence": "Initial research was insufficient.",
+            "confidence": "low",
+            "flags": [],
+            "deep_research_recommended": True,
+            "sources_used": [],
+            "evidence_items": [],
+            "claims": [],
+            "criteria_results": [],
+        },
+        "deep_research": {
+            "questions_investigated": [],
+            "revised_assessment": revised,
+            "unresolved": [],
+        },
+        "review": {"status": "pending"},
+    }
+
+    ok, entry = provisional_entry(assessment)
+
+    assert ok is True
+    assert entry["status"] == "assessed"
+    assert entry["score"] == 1
+    assert entry["evidence"] == revised["evidence"]
+    assert entry["evidence_items"] == revised["evidence_items"]

@@ -20,6 +20,23 @@ from tenant_sec_agentic.usage import (
     reserve_model_call,
 )
 
+DEEP_RESEARCH_TIMEOUT_SECONDS = 120
+
+
+def model_timeout_seconds(cfg: AssessmentConfig, role: str) -> int:
+    """Bound optional research latency without weakening core model calls."""
+    if role == "deep_research":
+        return min(
+            cfg.limits.model_timeout_seconds,
+            DEEP_RESEARCH_TIMEOUT_SECONDS,
+        )
+    return cfg.limits.model_timeout_seconds
+
+
+def model_retry_options() -> types.HttpRetryOptions:
+    """Disable hidden SDK retries; the metered pipeline owns retry policy."""
+    return types.HttpRetryOptions(attempts=1)
+
 
 class MeteredGemini(Gemini):
     """Native Vertex Gemini adapter with per-turn metering."""
@@ -64,8 +81,9 @@ class MeteredGemini(Gemini):
             project=project,
             location=location,
             http_options=types.HttpOptions(
-                timeout=self._cfg.limits.model_timeout_seconds * 1_000,
+                timeout=model_timeout_seconds(self._cfg, self._role) * 1_000,
                 headers=self._vertex_headers(),
+                retry_options=model_retry_options(),
             ),
         )
 
