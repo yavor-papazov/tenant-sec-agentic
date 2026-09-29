@@ -1010,3 +1010,54 @@ def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
         },
     )
     assert not any("publication state 'unknown'" in error for error in errors)
+
+
+def test_provisional_aggregation_uses_deep_research_revision():
+    revised = {
+        "status": "assessed",
+        "score": 1,
+        "services": {},
+        "evidence": "Deep research found an architecture-level capability.",
+        "confidence": "high",
+        "flags": [],
+        "deep_research_recommended": False,
+        "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
+    }
+    assessment = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "assessed",
+        "recommended_score": 1,
+        "recommended_services": None,
+        "overall_confidence": "high",
+        "prompt_hashes": prompt_hashes(),
+        "assessor": {
+            "status": "unknown",
+            "score": None,
+            "services": {},
+            "evidence": "Initial research was insufficient.",
+            "confidence": "low",
+            "flags": [],
+            "deep_research_recommended": True,
+            "sources_used": [],
+            "evidence_items": [],
+            "claims": [],
+            "criteria_results": [],
+        },
+        "deep_research": {
+            "questions_investigated": [],
+            "revised_assessment": revised,
+            "unresolved": [],
+        },
+        "review": {"status": "pending"},
+    }
+
+    ok, entry = provisional_entry(assessment)
+
+    assert ok is True
+    assert entry["status"] == "assessed"
+    assert entry["score"] == 1
+    assert entry["evidence"] == revised["evidence"]
+    assert entry["evidence_items"] == revised["evidence_items"]

@@ -17,7 +17,7 @@ from tenant_sec_agentic.artifacts import (
     control_entry_for_provider_schema,
     validate_internal_assessment,
 )
-from tenant_sec_agentic.pipeline import prompt_hashes
+from tenant_sec_agentic.pipeline import _final_recommendation, prompt_hashes
 from tenant_sec_agentic.repo import load_all_controls
 
 ASSESSOR_ID = re.compile(
@@ -38,10 +38,10 @@ def load_assessments(folder: Path) -> list[dict]:
 def approved_entry(a: dict) -> tuple[bool, dict | None]:
     rev = a.get("review") or {}
     st = rev.get("status")
+    assessor = _final_assessor(a)
     if st == "approved":
         result_status = str(a.get("result_status") or "unknown")
         score = a.get("recommended_score")
-        assessor = a.get("assessor") or {}
         rec_s = a.get("recommended_services")
         entry = control_entry_for_provider_schema(
             result_status,
@@ -55,7 +55,7 @@ def approved_entry(a: dict) -> tuple[bool, dict | None]:
         adj = rev.get("adjusted_score")
         if adj is None:
             return False, None
-        assessor = dict(a.get("assessor") or {})
+        assessor = dict(assessor)
         assessor["evidence"] = str(
             rev.get("adjustment_reasoning") or assessor.get("evidence", "")
         )
@@ -80,6 +80,16 @@ def approved_entry(a: dict) -> tuple[bool, dict | None]:
     return False, None
 
 
+def _final_assessor(assessment: dict) -> dict:
+    """Reconstruct the same assessor bundle used for the recommendation."""
+    _, _, _, _, assessor = _final_recommendation(
+        assessment.get("assessor") or {},
+        assessment.get("skeptic"),
+        assessment.get("deep_research"),
+    )
+    return assessor
+
+
 def provisional_entry(a: dict) -> tuple[bool, dict | None]:
     """Convert a current, valid recommendation without claiming review."""
     if a.get("status") != "needs_human_review":
@@ -90,12 +100,14 @@ def provisional_entry(a: dict) -> tuple[bool, dict | None]:
         for stage, digest in prompt_hashes().items()
     ):
         return False, None
-    if validate_internal_assessment(a):
+    assessor = _final_assessor(a)
+    final_assessment = {**a, "assessor": assessor}
+    if validate_internal_assessment(final_assessment):
         return False, None
     return True, control_entry_for_provider_schema(
         str(a.get("result_status") or "unknown"),
         a.get("recommended_score"),
-        a.get("assessor") or {},
+        assessor,
         a.get("recommended_services"),
         str(a.get("overall_confidence") or "low"),
     )
