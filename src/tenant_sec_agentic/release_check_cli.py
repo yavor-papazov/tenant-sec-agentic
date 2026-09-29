@@ -167,10 +167,12 @@ def main(argv: list[str] | None = None) -> None:
         )
     if all_errors:
         raise SystemExit(
-            "RC1 publication check failed:\n" + "\n".join(all_errors)
+            "Release-candidate publication check failed:\n"
+            + "\n".join(all_errors)
         )
     print(
-        f"RC1 publication checks passed for {len(args.provider)} provider(s)"
+        "Release-candidate publication checks passed for "
+        f"{len(args.provider)} provider(s)"
     )
 
 
