@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TenantSec assessment review</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --border: #ccc;
+      --muted: #666;
+      --ok: #1a7f37;
+      --warn: #9a6700;
+      --err: #cf222e;
+      --panel: rgba(127,127,127,0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      line-height: 1.45;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      min-height: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--border);
+      padding: 1rem;
+      overflow: auto;
+    }
+    main { padding: 1rem 1.25rem 2rem; overflow: auto; }
+    h1 { font-size: 1.1rem; margin: 0 0 0.5rem; }
+    h2 { font-size: 1rem; margin: 1.25rem 0 0.35rem; }
+    .meta { color: var(--muted); font-size: 0.9rem; }
+    .progress { margin: 0.75rem 0; font-weight: 600; }
+    .filters button {
+      margin-right: 0.35rem;
+      margin-bottom: 0.35rem;
+    }
+    .control-list { list-style: none; padding: 0; margin: 0.75rem 0 0; }
+    .control-list li { margin-bottom: 0.25rem; }
+    .control-list button {
+      width: 100%;
+      text-align: left;
+      padding: 0.35rem 0.5rem;
+    }
+    .control-list button.active { font-weight: 700; }
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.1rem 0.35rem;
+      border-radius: 0.25rem;
+      margin-left: 0.35rem;
+      background: var(--panel);
+    }
+    .badge.pending { color: var(--warn); }
+    .badge.reviewed { color: var(--ok); }
+    section.panel {
+      border: 1px solid var(--border);
+      border-radius: 0.35rem;
+      padding: 0.75rem;
+      margin-top: 0.75rem;
+      background: var(--panel);
+    }
+    pre, textarea {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+    }
+    textarea { width: 100%; min-height: 6rem; }
+    .claim { margin: 0.35rem 0; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      align-items: center;
+    }
+    .actions button.primary { font-weight: 700; }
+    .flash {
+      margin: 0.75rem 0;
+      padding: 0.5rem 0.75rem;
+      border-radius: 0.35rem;
+      display: none;
+    }
+    .flash.ok { display: block; background: rgba(26,127,55,0.15); color: var(--ok); }
+    .flash.err { display: block; background: rgba(207,34,46,0.12); color: var(--err); }
+    a { word-break: break-all; }
+    .nav-row { margin-top: 0.75rem; display: flex; gap: 0.5rem; }
+    .adjust-fields { margin-top: 0.75rem; display: none; }
+    .adjust-fields.visible { display: block; }
+    .empty { color: var(--muted); font-style: italic; }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Assessment review</h1>
+    <div class="meta" id="sessionMeta"></div>
+    <div class="progress" id="progress"></div>
+    <div class="filters">
+      <button type="button" data-filter="pending" id="filterPending">Pending</button>
+      <button type="button" data-filter="all" id="filterAll">All</button>
+    </div>
+    <ul class="control-list" id="controlList"></ul>
+  </aside>
+  <main>
+    <div class="flash" id="flash"></div>
+    <div id="detail">
+      <p class="empty">Select a control to review.</p>
+    </div>
+  </main>
+  <script>
+    const state = {
+      csrfToken: "",
+      filter: "pending",
+      controls: [],
+      currentControl: null,
+      detail: null,
+    };
+
+    function esc(text) {
+      return String(text ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function showFlash(message, ok) {
+      const el = document.getElementById("flash");
+      el.textContent = message;
+      el.className = "flash " + (ok ? "ok" : "err");
+    }
+
+    async function api(path, options = {}) {
+      const headers = Object.assign(
+        { "Content-Type": "application/json" },
+        options.headers || {}
+      );
+      if (options.method === "POST") {
+        headers["X-Review-Token"] = state.csrfToken;
+      }
+      const response = await fetch(path, Object.assign({}, options, { headers }));
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || response.statusText);
+      }
+      return data;
+    }
+
+    function renderProgress(progress) {
+      document.getElementById("progress").textContent =
+        `${progress.reviewed} reviewed · ${progress.pending} pending · ${progress.total} total`;
+    }
+
+    function renderControlList() {
+      const list = document.getElementById("controlList");
+      list.innerHTML = "";
+      for (const row of state.controls) {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        const reviewed = row.review_status !== "pending";
+        btn.className = state.currentControl === row.control ? "active" : "";
+        btn.innerHTML =
+          esc(row.control) +
+          `<span class="badge ${reviewed ? "reviewed" : "pending"}">${esc(row.review_status)}</span>`;
+        btn.onclick = () => loadControl(row.control);
+        li.appendChild(btn);
+        list.appendChild(li);
+      }
+    }
+
+    function linkList(urls) {
+      if (!urls || !urls.length) return "<span class='empty'>None</span>";
+      return urls.map((url) => `<div><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></div>`).join("");
+    }
+
+    function renderDetail(d) {
+      state.detail = d;
+      const review = d.review || {};
+      const recScore = d.recommended_score;
+      const servicesJson = JSON.stringify(d.recommended_services || {}, null, 2);
+      const mixed = recScore === "mixed" || review.adjusted_score === "mixed";
+      document.getElementById("detail").innerHTML = `
+        <h1>${esc(d.control)}</h1>
+        <div class="meta">
+          Recommendation: <strong>${esc(d.result_status)}</strong> /
+          score <strong>${esc(recScore)}</strong> ·
+          confidence <strong>${esc(d.overall_confidence)}</strong> ·
+          pipeline status <strong>${esc(d.status)}</strong>
+        </div>
+        <div class="nav-row">
+          <button type="button" id="prevBtn" ${d.navigation.previous ? "" : "disabled"}>← Previous pending</button>
+          <button type="button" id="nextBtn" ${d.navigation.next ? "" : "disabled"}>Next pending →</button>
+        </div>
+
+        <section class="panel">
+          <h2>Current review</h2>
+          <pre>${esc(JSON.stringify(review, null, 2))}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Assessment evidence</h2>
+          <pre>${esc(d.assessor.evidence || "No narrative evidence.")}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Atomic claims</h2>
+          ${(d.assessor.claims || []).length ? (d.assessor.claims.map((c) => `
+            <div class="claim"><strong>${esc(c.result)}</strong> — ${esc(c.assertion)}</div>
+          `).join("")) : "<p class='empty'>None</p>"}
+        </section>
+
+        <section class="panel">
+          <h2>Criteria results</h2>
+          <pre>${esc(JSON.stringify(d.assessor.criteria_results || [], null, 2))}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Evidence items</h2>
+          ${(d.assessor.evidence_items || []).map((item) => `
+            <div class="claim">
+              <strong>${esc(item.id)}</strong>
+              ${item.url ? `<div><a href="${esc(item.url)}" target="_blank" rel="noopener">${esc(item.url)}</a></div>` : ""}
+              <pre>${esc(item.quote || "")}</pre>
+            </div>
+          `).join("") || "<p class='empty'>None</p>"}
+        </section>
+
+        <section class="panel">
+          <h2>Recommended services</h2>
+          <pre>${esc(servicesJson)}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Skeptic review</h2>
+          <pre>${esc(d.skeptic.reasoning || "No skeptic narrative.")}</pre>
+          <h2>Flags</h2>
+          <pre>${esc(JSON.stringify(d.skeptic.skepticism_flags || [], null, 2))}</pre>
+          <h2>Deep research questions</h2>
+          <pre>${esc(JSON.stringify(d.skeptic.deep_research_questions || [], null, 2))}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Consistency</h2>
+          <pre>${esc(JSON.stringify(d.consistency || {}, null, 2))}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Unresolved issues</h2>
+          <pre>${esc(JSON.stringify(d.unresolved_issues || [], null, 2))}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Assessor sources</h2>
+          ${linkList(d.assessor.sources_used)}
+        </section>
+
+        <section class="panel">
+          <h2>Record decision</h2>
+          <label>Notes (optional)<br><textarea id="notesField">${esc(review.notes || "")}</textarea></label>
+          <div class="adjust-fields" id="adjustFields">
+            <label>Adjusted score (0-3 or mixed)<br>
+              <input id="adjustedScoreField" value="${esc(review.adjusted_score ?? recScore ?? "")}">
+            </label>
+            <div id="mixedServicesBlock" style="${mixed ? "" : "display:none"}">
+              <label>Adjusted services (JSON map)<br>
+                <textarea id="adjustedServicesField">${esc(JSON.stringify(review.adjusted_services || d.recommended_services || {}, null, 2))}</textarea>
+              </label>
+            </div>
+            <label>Adjustment reasoning (required for adjust)<br>
+              <textarea id="reasoningField">${esc(review.adjustment_reasoning || "")}</textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="button" class="primary" id="approveBtn">Approve recommendation</button>
+            <button type="button" id="adjustBtn">Adjust score…</button>
+            <button type="button" id="rejectBtn">Reject / request changes</button>
+          </div>
+        </section>
+      `;
+
+      document.getElementById("prevBtn").onclick = () => d.navigation.previous && loadControl(d.navigation.previous);
+      document.getElementById("nextBtn").onclick = () => d.navigation.next && loadControl(d.navigation.next);
+      document.getElementById("approveBtn").onclick = () => submitDecision("approved");
+      document.getElementById("rejectBtn").onclick = () => submitDecision("rejected");
+      document.getElementById("adjustBtn").onclick = () => {
+        document.getElementById("adjustFields").classList.add("visible");
+      };
+      const scoreField = document.getElementById("adjustedScoreField");
+      if (scoreField) {
+        scoreField.oninput = () => {
+          const mixedNow = scoreField.value.trim() === "mixed";
+          document.getElementById("mixedServicesBlock").style.display = mixedNow ? "block" : "none";
+        };
+      }
+      document.getElementById("adjustFields").classList.toggle(
+        "visible",
+        review.status === "adjusted"
+      );
+      if (review.status === "adjusted") {
+        document.getElementById("approveBtn").insertAdjacentHTML(
+          "afterend",
+          '<button type="button" id="saveAdjustBtn">Save adjustment</button>'
+        );
+        document.getElementById("saveAdjustBtn").onclick = () => submitDecision("adjusted");
+      } else {
+        document.getElementById("adjustBtn").insertAdjacentHTML(
+          "afterend",
+          '<button type="button" id="saveAdjustBtn" style="display:none">Save adjustment</button>'
+        );
+        document.getElementById("adjustBtn").addEventListener("click", () => {
+          document.getElementById("saveAdjustBtn").style.display = "inline-block";
+          document.getElementById("saveAdjustBtn").onclick = () => submitDecision("adjusted");
+        }, { once: true });
+      }
+    }
+
+    async function submitDecision(decision) {
+      if (!state.currentControl) return;
+      const payload = {
+        decision,
+        notes: document.getElementById("notesField").value.trim() || null,
+        csrf_token: state.csrfToken,
+      };
+      if (decision === "adjusted") {
+        const scoreRaw = document.getElementById("adjustedScoreField").value.trim();
+        payload.adjusted_score = scoreRaw === "mixed" ? "mixed" : Number(scoreRaw);
+        payload.reasoning = document.getElementById("reasoningField").value.trim();
+        if (scoreRaw === "mixed") {
+          try {
+            payload.adjusted_services = JSON.parse(
+              document.getElementById("adjustedServicesField").value
+            );
+          } catch (err) {
+            showFlash("Adjusted services must be valid JSON.", false);
+            return;
+          }
+        }
+      }
+      try {
+        const result = await api(`/api/controls/${encodeURIComponent(state.currentControl)}/review`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        showFlash(`Saved ${decision} for ${state.currentControl}.`, true);
+        renderProgress(result.progress);
+        await refreshControls();
+        await loadControl(state.currentControl);
+        if (decision !== "rejected" && result.navigation && result.navigation.next) {
+          // optional: auto-advance on approve
+        }
+      } catch (err) {
+        showFlash(err.message, false);
+      }
+    }
+
+    async function refreshControls() {
+      const data = await api(`/api/controls?filter=${encodeURIComponent(state.filter)}`);
+      state.controls = data.controls;
+      renderProgress(data.progress);
+      renderControlList();
+    }
+
+    async function loadControl(controlId) {
+      state.currentControl = controlId;
+      renderControlList();
+      const data = await api(`/api/controls/${encodeURIComponent(controlId)}`);
+      renderDetail(data);
+    }
+
+    async function boot() {
+      const session = await api("/api/session");
+      state.csrfToken = session.csrf_token;
+      document.getElementById("sessionMeta").textContent =
+        `${session.provider} · reviewer ${session.reviewer}`;
+      renderProgress(session.progress);
+      document.getElementById("filterPending").onclick = async () => {
+        state.filter = "pending";
+        await refreshControls();
+      };
+      document.getElementById("filterAll").onclick = async () => {
+        state.filter = "all";
+        await refreshControls();
+      };
+      await refreshControls();
+      if (state.controls.length) {
+        await loadControl(state.controls[0].control);
+      }
+    }
+
+    boot().catch((err) => showFlash(err.message, false));
+  </script>
+</body>
+</html>
