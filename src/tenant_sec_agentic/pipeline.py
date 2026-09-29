@@ -495,6 +495,7 @@ class AssessmentPipeline(BaseAgent):
             methodology=methodology_text
         )
         docs = ctx.session.state.get("doc_fetch_output") or {}
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
         user_text = (
             f"PROVIDER: {cfg.provider.display_name} ({cfg.provider.slug})\n"
             f"SERVICES IN SCOPE:\n"
@@ -502,7 +503,9 @@ class AssessmentPipeline(BaseAgent):
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
-            f"{json.dumps(docs, default=str)}```"
+            f"{json.dumps(docs, default=str)}```\n"
+            "FETCHED SOURCE URLS (the only URLs valid as evidence):\n"
+            f"```json\n{json.dumps(sorted(fetched))}```"
         )
         output = await _generate_json(
             ctx,
@@ -514,12 +517,16 @@ class AssessmentPipeline(BaseAgent):
         )
         ctx.session.state["assessor_output"] = output
         if isinstance(output, dict) and output.get("status") == "assessed":
-            fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-            ctx.session.state["assessor_output"] = _enrich_claim_bundle(
-                output,
-                cfg,
-                fetched,
-            )
+            try:
+                output = _enrich_claim_bundle(output, cfg, fetched)
+            except RuntimeError as exc:
+                logger.warning(
+                    "downgrading unverifiable assessor output for %s: %s",
+                    control_def.get("id"),
+                    exc,
+                )
+                output = _downgrade_unverifiable_claims(output, str(exc))
+            ctx.session.state["assessor_output"] = output
 
     async def _run_skeptic(
         self,
@@ -616,11 +623,22 @@ class AssessmentPipeline(BaseAgent):
         )
         if isinstance(revised, dict) and revised.get("status") == "assessed":
             fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-            output["revised_assessment"] = _enrich_claim_bundle(
-                revised,
-                cfg,
-                fetched,
-            )
+            try:
+                output["revised_assessment"] = _enrich_claim_bundle(
+                    revised,
+                    cfg,
+                    fetched,
+                )
+            except RuntimeError as exc:
+                logger.warning(
+                    "discarding unverifiable deep-research revision for %s: %s",
+                    control_def.get("id"),
+                    exc,
+                )
+                output["revised_assessment"] = None
+                unresolved = list(output.get("unresolved") or [])
+                unresolved.append(f"Unverifiable revised evidence: {exc}")
+                output["unresolved"] = unresolved
             ctx.session.state["deep_research_output"] = output
 
 
@@ -867,6 +885,50 @@ def _enrich_claim_bundle(
         items.append(item)
     enriched["evidence_items"] = items
     return enriched
+
+
+def _downgrade_unverifiable_claims(
+    assessor: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    """Fail closed when a model cites a source that was not fetched."""
+    downgraded = dict(assessor)
+    explanation = (
+        "No score was retained because the generated claim chain referenced "
+        f"unverified evidence ({reason})."
+    )
+    services: dict[str, dict[str, Any]] = {}
+    for service_id, raw in (assessor.get("services") or {}).items():
+        value = dict(raw) if isinstance(raw, dict) else {}
+        value.update(
+            {
+                "status": "unknown",
+                "score": None,
+                "evidence": explanation,
+                "confidence": "low",
+                "sources_used": [],
+            }
+        )
+        services[str(service_id)] = value
+    downgraded.update(
+        {
+            "status": "unknown",
+            "score": None,
+            "services": services,
+            "evidence": explanation,
+            "confidence": "low",
+            "flags": [
+                *list(assessor.get("flags") or []),
+                "unverified-evidence-reference",
+            ],
+            "deep_research_recommended": True,
+            "sources_used": [],
+            "evidence_items": [],
+            "claims": [],
+            "criteria_results": [],
+        }
+    )
+    return downgraded
 
 
 def _match_fetched_document(

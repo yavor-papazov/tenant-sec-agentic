@@ -26,6 +26,7 @@ from tenant_sec_agentic.pipeline import (
     AssessmentPipeline,
     _adk_generation_config,
     _canonical_evidence_url,
+    _downgrade_unverifiable_claims,
     _drain_agent,
     _enrich_claim_bundle,
     _final_recommendation,
@@ -668,6 +669,43 @@ def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
     item = enriched["evidence_items"][0]
     assert item["content_hash"].startswith("sha256:")
     assert item["applicability"]["offering"] == "public"
+
+
+def test_unverifiable_claims_fail_closed_as_unknown():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "object-storage": {
+                "status": "assessed",
+                "score": 2,
+                "evidence": "Generated evidence.",
+                "confidence": "medium",
+                "sources_used": ["https://unfetched.example/doc"],
+            }
+        },
+        "evidence": "Generated evidence.",
+        "confidence": "medium",
+        "flags": [],
+        "deep_research_recommended": False,
+        "sources_used": ["https://unfetched.example/doc"],
+        **_claims(),
+    }
+
+    downgraded = _downgrade_unverifiable_claims(
+        assessor,
+        "claim evidence URL was not fetched",
+    )
+
+    validated = AssessorStructured.model_validate(downgraded)
+    assert validated.status == "unknown"
+    assert validated.score is None
+    assert validated.services["object-storage"].status == "unknown"
+    assert validated.services["object-storage"].score is None
+    assert validated.evidence_items == []
+    assert validated.claims == []
+    assert validated.criteria_results == []
+    assert validated.deep_research_recommended is True
 
 
 def test_batch_runner_recognizes_current_review_artifact(tmp_path):
