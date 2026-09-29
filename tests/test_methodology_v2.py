@@ -1061,3 +1061,10 @@ def test_provisional_aggregation_uses_deep_research_revision():
     assert entry["score"] == 1
     assert entry["evidence"] == revised["evidence"]
     assert entry["evidence_items"] == revised["evidence_items"]
+
+    assessment["review"] = {"status": "approved"}
+    approved, approved_result = approved_entry(assessment)
+
+    assert approved is True
+    assert approved_result["evidence"] == revised["evidence"]
+    assert approved_result["evidence_items"] == revised["evidence_items"]
