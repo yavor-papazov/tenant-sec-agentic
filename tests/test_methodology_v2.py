@@ -24,7 +24,7 @@ from tenant_sec_agentic.pipeline import (
     _canonical_evidence_url,
     _drain_agent,
     _enrich_claim_bundle,
-    _final_recommendation,
+    final_recommendation,
     _load_stage_checkpoint,
     _mock_assessor,
     _normalize_fetched_documents,
@@ -161,7 +161,7 @@ def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):
     result = _mock_assessor({"service_scoped": True}, config)
     assert result["status"] == "unknown"
     assert result["score"] is None
-    status, score, _, _, _ = _final_recommendation(result, None, None)
+    status, score, _, _, _ = final_recommendation(result, None, None)
     assert status == "unknown"
     assert score is None
 
@@ -190,7 +190,7 @@ def test_challenger_downgrade_preserves_claim_traceability():
         "reasoning": "The managed path is incomplete.",
         "sources_used": ["https://example.com/docs/limits"],
     }
-    status, score, _, _, final = _final_recommendation(
+    status, score, _, _, final = final_recommendation(
         assessor,
         skeptic,
         None,

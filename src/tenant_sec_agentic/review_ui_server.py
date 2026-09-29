@@ -16,12 +16,15 @@ from tenant_sec_agentic.review_decisions import (
     artifact_path_for_control,
     load_artifact,
     resolve_assessments_root,
+    resolve_provider_dir,
+    validate_reviewer_identity,
 )
 from tenant_sec_agentic.review_ui_store import (
     FilterKind,
     control_detail,
     list_assessment_files,
     load_provider_artifacts,
+    next_pending_after_save,
     pending_navigation,
     progress_counts,
     save_review_decision,
@@ -198,6 +201,7 @@ class ReviewUiHandler(BaseHTTPRequestHandler):
                 reasoning=body.get("reasoning"),
             )
             artifacts = self._artifacts()
+            next_pending = next_pending_after_save(artifacts, control_id)
             self._send_json(
                 HTTPStatus.OK,
                 {
@@ -205,6 +209,7 @@ class ReviewUiHandler(BaseHTTPRequestHandler):
                     "review": review,
                     "progress": progress_counts(artifacts),
                     "navigation": pending_navigation(artifacts, control_id),
+                    "next_pending_control": next_pending,
                 },
             )
         except FileNotFoundError as exc:
@@ -233,10 +238,9 @@ def run_server(
 ) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("review UI may only bind to localhost")
+    validate_reviewer_identity(reviewer)
     assessments_root = resolve_assessments_root(assessments_dir)
-    provider_dir = assessments_root / provider
-    if not provider_dir.is_dir():
-        raise ValueError(f"missing assessments folder: {provider_dir}")
+    provider_dir = resolve_provider_dir(assessments_root, provider)
     if not list_assessment_files(provider_dir):
         raise ValueError(f"no assessment YAML files in {provider_dir}")
     config = ReviewUiConfig(

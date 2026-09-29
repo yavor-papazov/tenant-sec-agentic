@@ -13,7 +13,7 @@ tenant-sec-review-ui \
   --reviewer 'community:your-handle'
 ```
 
-Open [http://127.0.0.1:8765/](http://127.0.0.1:8765/). The server binds to `127.0.0.1` by default and refuses non-localhost hosts.
+Open [http://127.0.0.1:8765/](http://127.0.0.1:8765/). The server binds to `127.0.0.1` by default and refuses non-localhost hosts. `--reviewer` must match aggregation (`self`, `community:{handle}`, or `accredited:{org}`).
 
 ## Behavior
 

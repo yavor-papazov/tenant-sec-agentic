@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
+from tenant_sec_agentic.pipeline import final_recommendation, recommendation_provenance
 from tenant_sec_agentic.review_decisions import (
     apply_review_to_artifact,
     artifact_path_for_control,
@@ -16,6 +17,12 @@ from tenant_sec_agentic.review_decisions import (
 
 FilterKind = Literal["all", "pending"]
 REVIEWED_STATUSES = frozenset({"approved", "adjusted", "rejected"})
+
+PROVENANCE_LABELS = {
+    "deep_research_revised": "Deep research revised assessment",
+    "skeptic_downgrade": "Skeptic downgrade applied",
+    "initial_assessor": "Initial assessor recommendation",
+}
 
 
 def review_status(artifact: dict[str, Any]) -> str:
@@ -49,6 +56,22 @@ def load_provider_artifacts(
     return loaded
 
 
+def _control_id(path: Path, data: dict[str, Any]) -> str:
+    return str(data.get("control") or path.stem)
+
+
+def sorted_control_ids(artifacts: list[tuple[Path, dict[str, Any]]]) -> list[str]:
+    return sorted(_control_id(path, data) for path, data in artifacts)
+
+
+def _pending_id_set(artifacts: list[tuple[Path, dict[str, Any]]]) -> set[str]:
+    return {
+        _control_id(path, data)
+        for path, data in artifacts
+        if is_pending(data)
+    }
+
+
 def summarize_controls(
     artifacts: list[tuple[Path, dict[str, Any]]],
     *,
@@ -61,7 +84,7 @@ def summarize_controls(
             continue
         rows.append(
             {
-                "control": str(data.get("control") or path.stem),
+                "control": _control_id(path, data),
                 "review_status": review_status(data),
                 "result_status": data.get("result_status"),
                 "recommended_score": data.get("recommended_score"),
@@ -83,12 +106,7 @@ def progress_counts(artifacts: list[tuple[Path, dict[str, Any]]]) -> dict[str, i
     }
 
 
-def control_detail(data: dict[str, Any]) -> dict[str, Any]:
-    assessor = data.get("assessor") if isinstance(data.get("assessor"), dict) else {}
-    skeptic = data.get("skeptic") if isinstance(data.get("skeptic"), dict) else {}
-    consistency = (
-        data.get("consistency") if isinstance(data.get("consistency"), dict) else {}
-    )
+def _assessor_view(assessor: dict[str, Any]) -> dict[str, Any]:
     evidence_items = [
         item
         for item in assessor.get("evidence_items") or []
@@ -100,6 +118,33 @@ def control_detail(data: dict[str, Any]) -> dict[str, Any]:
         for item in assessor.get("criteria_results") or []
         if isinstance(item, dict)
     ]
+    return {
+        "evidence": assessor.get("evidence"),
+        "confidence": assessor.get("confidence"),
+        "services": assessor.get("services"),
+        "sources_used": assessor.get("sources_used") or [],
+        "evidence_items": evidence_items,
+        "claims": claims,
+        "criteria_results": criteria,
+    }
+
+
+def control_detail(data: dict[str, Any]) -> dict[str, Any]:
+    initial_assessor = (
+        data.get("assessor") if isinstance(data.get("assessor"), dict) else {}
+    )
+    skeptic = data.get("skeptic") if isinstance(data.get("skeptic"), dict) else {}
+    consistency = (
+        data.get("consistency") if isinstance(data.get("consistency"), dict) else {}
+    )
+    raw_deep = data.get("deep_research")
+    deep_research = raw_deep if isinstance(raw_deep, dict) else None
+
+    result_status, rec_score, rec_services, confidence, final_assessor = (
+        final_recommendation(initial_assessor, skeptic, deep_research)
+    )
+    provenance = recommendation_provenance(initial_assessor, skeptic, deep_research)
+
     unresolved: list[dict[str, Any]] = []
     for flag in skeptic.get("skepticism_flags") or []:
         if isinstance(flag, dict):
@@ -107,7 +152,7 @@ def control_detail(data: dict[str, Any]) -> dict[str, Any]:
     for flag in consistency.get("consistency_flags") or []:
         if isinstance(flag, dict):
             unresolved.append({"source": "consistency", **flag})
-    for flag in assessor.get("flags") or []:
+    for flag in initial_assessor.get("flags") or []:
         if isinstance(flag, dict):
             unresolved.append({"source": "assessor", **flag})
         elif flag:
@@ -124,19 +169,20 @@ def control_detail(data: dict[str, Any]) -> dict[str, Any]:
     return {
         "control": data.get("control"),
         "provider": data.get("provider"),
-        "result_status": data.get("result_status"),
-        "recommended_score": data.get("recommended_score"),
-        "recommended_services": data.get("recommended_services"),
-        "overall_confidence": data.get("overall_confidence"),
+        "result_status": result_status,
+        "recommended_score": rec_score,
+        "recommended_services": rec_services,
+        "overall_confidence": confidence,
         "status": data.get("status"),
-        "assessor": {
-            "evidence": assessor.get("evidence"),
-            "confidence": assessor.get("confidence"),
-            "services": assessor.get("services"),
-            "sources_used": assessor.get("sources_used") or [],
-            "evidence_items": evidence_items,
-            "claims": claims,
-            "criteria_results": criteria,
+        "recommendation_provenance": provenance,
+        "recommendation_provenance_label": PROVENANCE_LABELS.get(
+            provenance,
+            provenance,
+        ),
+        "assessor": _assessor_view(final_assessor),
+        "context": {
+            "initial_assessor": _assessor_view(initial_assessor),
+            "deep_research": deep_research,
         },
         "skeptic": {
             "reasoning": skeptic.get("reasoning"),
@@ -144,7 +190,6 @@ def control_detail(data: dict[str, Any]) -> dict[str, Any]:
             "deep_research_questions": deep_questions,
         },
         "consistency": consistency,
-        "deep_research": data.get("deep_research"),
         "unresolved_issues": unresolved,
         "review": data.get("review") or {},
     }
@@ -153,12 +198,7 @@ def control_detail(data: dict[str, Any]) -> dict[str, Any]:
 def pending_navigation(
     artifacts: list[tuple[Path, dict[str, Any]]], control_id: str
 ) -> dict[str, str | None]:
-    pending_ids = [
-        str(data.get("control") or path.stem)
-        for path, data in artifacts
-        if is_pending(data)
-    ]
-    pending_ids.sort()
+    pending_ids = sorted(_pending_id_set(artifacts))
     if control_id not in pending_ids:
         return {"previous": None, "next": None}
     index = pending_ids.index(control_id)
@@ -168,6 +208,22 @@ def pending_navigation(
         if index + 1 < len(pending_ids)
         else None,
     }
+
+
+def next_pending_after_save(
+    artifacts: list[tuple[Path, dict[str, Any]]], saved_control_id: str
+) -> str | None:
+    """Next pending control after a save, in portfolio sort order."""
+    all_ids = sorted_control_ids(artifacts)
+    pending_ids = sorted(_pending_id_set(artifacts))
+    if not pending_ids:
+        return None
+    if saved_control_id in all_ids:
+        index = all_ids.index(saved_control_id)
+        for control_id in all_ids[index + 1 :]:
+            if control_id in pending_ids:
+                return control_id
+    return pending_ids[0]
 
 
 def save_review_decision(

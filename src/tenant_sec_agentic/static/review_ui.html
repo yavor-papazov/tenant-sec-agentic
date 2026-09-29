@@ -185,11 +185,12 @@
       document.getElementById("detail").innerHTML = `
         <h1>${esc(d.control)}</h1>
         <div class="meta">
-          Recommendation: <strong>${esc(d.result_status)}</strong> /
+          Final recommendation: <strong>${esc(d.result_status)}</strong> /
           score <strong>${esc(recScore)}</strong> ·
           confidence <strong>${esc(d.overall_confidence)}</strong> ·
           pipeline status <strong>${esc(d.status)}</strong>
         </div>
+        <div class="meta"><strong>${esc(d.recommendation_provenance_label || d.recommendation_provenance)}</strong></div>
         <div class="nav-row">
           <button type="button" id="prevBtn" ${d.navigation.previous ? "" : "disabled"}>← Previous pending</button>
           <button type="button" id="nextBtn" ${d.navigation.next ? "" : "disabled"}>Next pending →</button>
@@ -201,7 +202,7 @@
         </section>
 
         <section class="panel">
-          <h2>Assessment evidence</h2>
+          <h2>Final assessment evidence (approve/adjust this)</h2>
           <pre>${esc(d.assessor.evidence || "No narrative evidence.")}</pre>
         </section>
 
@@ -253,8 +254,20 @@
         </section>
 
         <section class="panel">
-          <h2>Assessor sources</h2>
+          <h2>Final recommendation sources</h2>
           ${linkList(d.assessor.sources_used)}
+        </section>
+
+        <section class="panel">
+          <h2>Context: initial assessor (before reconciliation)</h2>
+          <pre>${esc((d.context && d.context.initial_assessor && d.context.initial_assessor.evidence) || "No initial narrative.")}</pre>
+          <h3>Initial claims / criteria</h3>
+          <pre>${esc(JSON.stringify((d.context && d.context.initial_assessor) || {}, null, 2))}</pre>
+        </section>
+
+        <section class="panel">
+          <h2>Context: deep research raw output</h2>
+          <pre>${esc(JSON.stringify((d.context && d.context.deep_research) || null, null, 2))}</pre>
         </section>
 
         <section class="panel">
@@ -344,12 +357,23 @@
           method: "POST",
           body: JSON.stringify(payload),
         });
-        showFlash(`Saved ${decision} for ${state.currentControl}.`, true);
+        const saved = state.currentControl;
+        const next = result.next_pending_control;
+        showFlash(
+          next
+            ? `Saved ${decision} for ${saved}. Opening next pending: ${next}.`
+            : `Saved ${decision} for ${saved}. No pending controls remain.`,
+          true
+        );
         renderProgress(result.progress);
         await refreshControls();
-        await loadControl(state.currentControl);
-        if (decision !== "rejected" && result.navigation && result.navigation.next) {
-          // optional: auto-advance on approve
+        if (next) {
+          await loadControl(next);
+        } else {
+          state.currentControl = null;
+          document.getElementById("detail").innerHTML =
+            "<p class='empty'>All controls reviewed for this filter.</p>";
+          renderControlList();
         }
       } catch (err) {
         showFlash(err.message, false);

@@ -306,9 +306,9 @@ class AssessmentPipeline(BaseAgent):
                 err_detail = str(e)
 
             result_status, rec_score, rec_services, conf, final_assessor = (
-                _final_recommendation(
-                assessor_out, skeptic_out, deep_out
-            )
+                final_recommendation(
+                    assessor_out, skeptic_out, deep_out
+                )
             )
             if rec_score == "mixed" and rec_services is not None:
                 rec_services = _normalize_service_evidence(
@@ -842,7 +842,20 @@ def _should_deep_research(
     return False
 
 
-def _final_recommendation(
+def recommendation_provenance(
+    assessor: dict[str, Any],
+    skeptic: dict[str, Any] | None,
+    deep: dict[str, Any] | None,
+) -> str:
+    revised = (deep or {}).get("revised_assessment")
+    if isinstance(revised, dict) and revised.get("status"):
+        return "deep_research_revised"
+    if skeptic and skeptic.get("verdict") == "downgrade":
+        return "skeptic_downgrade"
+    return "initial_assessor"
+
+
+def final_recommendation(
     assessor: dict[str, Any],
     skeptic: dict[str, Any] | None,
     deep: dict[str, Any] | None,

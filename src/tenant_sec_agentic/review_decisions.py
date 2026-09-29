@@ -14,6 +14,16 @@ import yaml
 REVIEW_DECISIONS = frozenset({"approved", "adjusted", "rejected"})
 PROVIDER_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 CONTROL_ID_RE = re.compile(r"^[a-z][a-z0-9.-]*$")
+REVIEWER_ID_RE = re.compile(
+    r"^(self|community:[a-z0-9_-]+|accredited:[a-z0-9_-]+)$"
+)
+
+
+def validate_reviewer_identity(reviewer: str) -> None:
+    if not REVIEWER_ID_RE.fullmatch(reviewer):
+        raise ValueError(
+            "reviewer must match self, community:{handle}, or accredited:{org}"
+        )
 
 
 def parse_adjusted_score(value: Any) -> int | str:
