@@ -72,6 +72,76 @@ def _pending_id_set(artifacts: list[tuple[Path, dict[str, Any]]]) -> set[str]:
     }
 
 
+def _stage_inputs(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    initial_assessor = (
+        data.get("assessor") if isinstance(data.get("assessor"), dict) else {}
+    )
+    skeptic = data.get("skeptic") if isinstance(data.get("skeptic"), dict) else {}
+    raw_deep = data.get("deep_research")
+    deep_research = raw_deep if isinstance(raw_deep, dict) else None
+    return initial_assessor, skeptic, deep_research
+
+
+def reconciled_recommendation(
+    data: dict[str, Any],
+) -> tuple[str, Any, dict[str, Any] | None, str, dict[str, Any], str]:
+    initial_assessor, skeptic, deep_research = _stage_inputs(data)
+    result_status, rec_score, rec_services, confidence, final_assessor = (
+        final_recommendation(initial_assessor, skeptic, deep_research)
+    )
+    provenance = recommendation_provenance(
+        initial_assessor, skeptic, deep_research
+    )
+    return (
+        result_status,
+        rec_score,
+        rec_services,
+        confidence,
+        final_assessor,
+        provenance,
+    )
+
+
+def recommendation_publish_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """Top-level fields aggregate_cli uses on approve."""
+    return {
+        "result_status": data.get("result_status"),
+        "recommended_score": data.get("recommended_score"),
+        "recommended_services": data.get("recommended_services"),
+        "overall_confidence": data.get("overall_confidence"),
+    }
+
+
+def recommendation_diverges_from_artifact(data: dict[str, Any]) -> bool:
+    """True when reconciled final recommendation differs from publish fields."""
+    result_status, rec_score, rec_services, confidence, _, _ = (
+        reconciled_recommendation(data)
+    )
+    top = recommendation_publish_fields(data)
+    if top["result_status"] != result_status:
+        return True
+    if top["recommended_score"] != rec_score:
+        return True
+    if str(top["overall_confidence"] or "low") != confidence:
+        return True
+    if rec_score == "mixed":
+        return (top["recommended_services"] or {}) != (rec_services or {})
+    return False
+
+
+def sync_publish_fields_from_final(artifact: dict[str, Any]) -> None:
+    """Align approve-publish fields with displayed final_recommendation."""
+    result_status, rec_score, rec_services, confidence, _, _ = (
+        reconciled_recommendation(artifact)
+    )
+    artifact["result_status"] = result_status
+    artifact["recommended_score"] = rec_score
+    artifact["recommended_services"] = rec_services
+    artifact["overall_confidence"] = confidence
+
+
 def summarize_controls(
     artifacts: list[tuple[Path, dict[str, Any]]],
     *,
@@ -82,14 +152,20 @@ def summarize_controls(
         pending = is_pending(data)
         if filter_kind == "pending" and not pending:
             continue
+        result_status, rec_score, _, confidence, _, _ = reconciled_recommendation(
+            data
+        )
         rows.append(
             {
                 "control": _control_id(path, data),
                 "review_status": review_status(data),
-                "result_status": data.get("result_status"),
-                "recommended_score": data.get("recommended_score"),
-                "overall_confidence": data.get("overall_confidence"),
+                "result_status": result_status,
+                "recommended_score": rec_score,
+                "overall_confidence": confidence,
                 "status": data.get("status"),
+                "recommendation_diverges": recommendation_diverges_from_artifact(
+                    data
+                ),
             }
         )
     rows.sort(key=lambda row: row["control"])
@@ -130,20 +206,14 @@ def _assessor_view(assessor: dict[str, Any]) -> dict[str, Any]:
 
 
 def control_detail(data: dict[str, Any]) -> dict[str, Any]:
-    initial_assessor = (
-        data.get("assessor") if isinstance(data.get("assessor"), dict) else {}
-    )
-    skeptic = data.get("skeptic") if isinstance(data.get("skeptic"), dict) else {}
+    initial_assessor, skeptic, deep_research = _stage_inputs(data)
     consistency = (
         data.get("consistency") if isinstance(data.get("consistency"), dict) else {}
     )
-    raw_deep = data.get("deep_research")
-    deep_research = raw_deep if isinstance(raw_deep, dict) else None
-
-    result_status, rec_score, rec_services, confidence, final_assessor = (
-        final_recommendation(initial_assessor, skeptic, deep_research)
+    result_status, rec_score, rec_services, confidence, final_assessor, provenance = (
+        reconciled_recommendation(data)
     )
-    provenance = recommendation_provenance(initial_assessor, skeptic, deep_research)
+    diverges = recommendation_diverges_from_artifact(data)
 
     unresolved: list[dict[str, Any]] = []
     for flag in skeptic.get("skepticism_flags") or []:
@@ -178,6 +248,19 @@ def control_detail(data: dict[str, Any]) -> dict[str, Any]:
         "recommendation_provenance_label": PROVENANCE_LABELS.get(
             provenance,
             provenance,
+        ),
+        "artifact_recommendation": recommendation_publish_fields(data),
+        "recommendation_diverges": diverges,
+        "approve_publish_note": (
+            "Approve publishes top-level recommendation fields via aggregate_cli "
+            "and evidence/claims from the artifact assessor block (initial stage). "
+            "This UI shows the reconciled final_recommendation for scoring judgment."
+            + (
+                " Top-level publish fields currently diverge; Approve will sync them "
+                "to the displayed reconciled recommendation before writing review.status."
+                if diverges
+                else ""
+            )
         ),
         "assessor": _assessor_view(final_assessor),
         "context": {
@@ -245,6 +328,10 @@ def save_review_decision(
     artifact = load_artifact(path)
     if str(artifact.get("control") or control_id) != control_id:
         raise ValueError(f"control mismatch for {path}")
+    # Approve means approve the displayed reconciled recommendation. Sync
+    # aggregate_cli publish fields when stale artifacts diverge from stages.
+    if decision == "approved" and recommendation_diverges_from_artifact(artifact):
+        sync_publish_fields_from_final(artifact)
     apply_review_to_artifact(
         artifact,
         decision,

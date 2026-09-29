@@ -191,6 +191,8 @@
           pipeline status <strong>${esc(d.status)}</strong>
         </div>
         <div class="meta"><strong>${esc(d.recommendation_provenance_label || d.recommendation_provenance)}</strong></div>
+        ${d.recommendation_diverges ? `<div class="flash err" style="display:block">Artifact top-level publish fields diverge from this reconciled recommendation. Approve will sync score/status/confidence/services to match what you see before writing the review.</div>` : ""}
+        <div class="meta">${esc(d.approve_publish_note || "")}</div>
         <div class="nav-row">
           <button type="button" id="prevBtn" ${d.navigation.previous ? "" : "disabled"}>← Previous pending</button>
           <button type="button" id="nextBtn" ${d.navigation.next ? "" : "disabled"}>Next pending →</button>
@@ -199,6 +201,7 @@
         <section class="panel">
           <h2>Current review</h2>
           <pre>${esc(JSON.stringify(review, null, 2))}</pre>
+          ${d.recommendation_diverges ? `<h3>Stale artifact publish fields</h3><pre>${esc(JSON.stringify(d.artifact_recommendation || {}, null, 2))}</pre>` : ""}
         </section>
 
         <section class="panel">
@@ -339,8 +342,23 @@
       };
       if (decision === "adjusted") {
         const scoreRaw = document.getElementById("adjustedScoreField").value.trim();
-        payload.adjusted_score = scoreRaw === "mixed" ? "mixed" : Number(scoreRaw);
+        if (!scoreRaw) {
+          showFlash("Adjusted score is required (0-3 or mixed).", false);
+          return;
+        }
+        if (scoreRaw === "mixed") {
+          payload.adjusted_score = "mixed";
+        } else if (/^[0-3]$/.test(scoreRaw)) {
+          payload.adjusted_score = Number(scoreRaw);
+        } else {
+          showFlash("Adjusted score must be 0, 1, 2, 3, or mixed.", false);
+          return;
+        }
         payload.reasoning = document.getElementById("reasoningField").value.trim();
+        if (!payload.reasoning) {
+          showFlash("Adjustment reasoning is required.", false);
+          return;
+        }
         if (scoreRaw === "mixed") {
           try {
             payload.adjusted_services = JSON.parse(

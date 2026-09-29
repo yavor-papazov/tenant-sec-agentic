@@ -38,6 +38,21 @@ def parse_adjusted_score(value: Any) -> int | str:
     return score
 
 
+def validate_adjusted_services(adjusted_services: Any) -> None:
+    if not isinstance(adjusted_services, dict) or not adjusted_services:
+        raise ValueError("mixed adjusted_score requires adjusted_services map")
+    for service_id, value in adjusted_services.items():
+        if not str(service_id).strip():
+            raise ValueError("adjusted_services keys must be non-empty service ids")
+        if isinstance(value, dict):
+            score = value.get("score")
+            status = value.get("status")
+            if status == "assessed" or score is not None:
+                parse_adjusted_score(score)
+            continue
+        parse_adjusted_score(value)
+
+
 def validate_decision_fields(
     decision: str,
     *,
@@ -53,8 +68,7 @@ def validate_decision_fields(
         return
     parse_adjusted_score(adjusted_score)
     if adjusted_score == "mixed":
-        if not isinstance(adjusted_services, dict) or not adjusted_services:
-            raise ValueError("mixed adjusted_score requires adjusted_services map")
+        validate_adjusted_services(adjusted_services)
     reasoning_text = str(reasoning or "").strip()
     if not reasoning_text:
         raise ValueError("adjusted decision requires reasoning")

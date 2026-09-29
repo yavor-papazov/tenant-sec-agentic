@@ -17,6 +17,7 @@ from tenant_sec_agentic.review_decisions import (
     atomic_write_artifact,
     resolve_assessments_root,
     resolve_provider_dir,
+    validate_adjusted_services,
     validate_reviewer_identity,
 )
 from tenant_sec_agentic.review_ui_server import ReviewUiConfig, ReviewUiHandler
@@ -24,6 +25,7 @@ from tenant_sec_agentic.review_ui_store import (
     control_detail,
     is_pending,
     next_pending_after_save,
+    recommendation_diverges_from_artifact,
     save_review_decision,
 )
 
@@ -112,10 +114,77 @@ def test_control_detail_uses_deep_research_revised_assessment() -> None:
     assert detail["result_status"] == "assessed"
     assert detail["recommended_score"] == 2
     assert detail["recommendation_provenance"] == "deep_research_revised"
+    assert detail["recommendation_diverges"] is True
+    assert detail["artifact_recommendation"]["recommended_score"] is None
     assert detail["assessor"]["evidence"] == "Revised after deep research."
     assert detail["assessor"]["claims"][0]["assertion"] == "revised claim"
     assert detail["assessor"]["criteria_results"][0]["level"] == 2
     assert detail["context"]["initial_assessor"]["evidence"] == "Initial thin evidence."
+
+
+def test_approve_syncs_stale_top_level_recommendation(tmp_path: Path) -> None:
+    root = resolve_assessments_root(tmp_path / "assessments")
+    provider_dir = root / "aws"
+    provider_dir.mkdir(parents=True)
+    path = provider_dir / "enc.cmk.yaml"
+    payload = {
+        "control": "enc.cmk",
+        "provider": "aws",
+        "result_status": "assessed",
+        "recommended_score": "mixed",
+        "recommended_services": {"s3": 2},
+        "overall_confidence": "medium",
+        "status": "needs_human_review",
+        "assessor": {
+            "status": "assessed",
+            "score": "mixed",
+            "evidence": "Initial mixed.",
+            "claims": [],
+            "criteria_results": [],
+            "evidence_items": [],
+            "sources_used": [],
+        },
+        "skeptic": {"reasoning": "ok", "skepticism_flags": []},
+        "consistency": {},
+        "deep_research": {
+            "revised_assessment": {
+                "status": "assessed",
+                "score": 0,
+                "confidence": "high",
+                "evidence": "No CMK offering.",
+                "claims": [],
+                "criteria_results": [],
+                "evidence_items": [],
+                "sources_used": ["https://example.com"],
+            }
+        },
+        "review": {"status": "pending"},
+    }
+    atomic_write_artifact(path, payload)
+    assert recommendation_diverges_from_artifact(payload) is True
+    save_review_decision(
+        root,
+        "aws",
+        "enc.cmk",
+        "community:reviewer",
+        decision="approved",
+        notes="Agree with reconciled score 0.",
+    )
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert data["review"]["status"] == "approved"
+    assert data["result_status"] == "assessed"
+    assert data["recommended_score"] == 0
+    assert data["recommended_services"] is None
+    assert data["overall_confidence"] == "high"
+    assert data["assessor"]["evidence"] == "Initial mixed."
+
+
+def test_adjusted_services_rejects_invalid_scores() -> None:
+    with pytest.raises(ValueError, match="adjusted_score must be"):
+        validate_adjusted_services({"s3": 9})
+    with pytest.raises(ValueError, match="adjusted_services"):
+        validate_adjusted_services({})
+    validate_adjusted_services({"s3": 2, "ec2": {"status": "assessed", "score": 1}})
 
 
 def test_next_pending_after_save_skips_reviewed_control() -> None:
