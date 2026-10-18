@@ -12,4 +12,5 @@ methodology 2.0 claim chain: evidence_items with verbatim quotes, atomic
 claims, and exactly one criteria_result for each level 0-3. Preserve valid
 items from the original assessment and add the new decisive evidence. Every
 met criterion must cite a supported claim, and the numeric score must be the
-highest met criterion.
+highest met criterion. Keep commercial availability in the separate
+`licensing` observation; it must not affect the maturity score.

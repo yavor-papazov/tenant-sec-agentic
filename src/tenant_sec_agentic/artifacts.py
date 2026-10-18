@@ -322,6 +322,7 @@ def control_entry_for_provider_schema(
     sources = _source_references(
         assessor.get("sources_used") or [], evidence_items
     )
+    licensing = _licensing_entry(assessor, evidence_items)
     if result_status != "assessed":
         out = {
             "status": result_status,
@@ -331,6 +332,8 @@ def control_entry_for_provider_schema(
         }
         if sources:
             out["references"] = sources
+        if licensing:
+            out["licensing"] = licensing
         return out
 
     if recommended_score == "mixed":
@@ -378,7 +381,7 @@ def control_entry_for_provider_schema(
                         sources.append(reference)
             services_out[sid] = service_entry
         summ = evidence[:500] or "Per-service maturity varies."
-        return {
+        out = {
             "status": "assessed",
             "score": "mixed",
             "summary": summ,
@@ -388,7 +391,10 @@ def control_entry_for_provider_schema(
             "references": sources,
             **_claim_bundle(assessor),
         }
-    return {
+        if licensing:
+            out["licensing"] = licensing
+        return out
+    out = {
         "status": "assessed",
         "score": int(recommended_score),
         "evidence": evidence or "No evidence captured.",
@@ -397,6 +403,9 @@ def control_entry_for_provider_schema(
         "references": sources,
         **_claim_bundle(assessor),
     }
+    if licensing:
+        out["licensing"] = licensing
+    return out
 
 
 def _claim_bundle(assessor: dict[str, Any]) -> dict[str, Any]:
@@ -405,6 +414,30 @@ def _claim_bundle(assessor: dict[str, Any]) -> dict[str, Any]:
         "claims": list(assessor.get("claims") or []),
         "criteria_results": list(assessor.get("criteria_results") or []),
     }
+
+
+def _licensing_entry(
+    assessor: dict[str, Any],
+    evidence_items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    licensing = assessor.get("licensing")
+    if not isinstance(licensing, dict):
+        return None
+    status = str(licensing.get("status") or "unknown")
+    evidence = str(licensing.get("evidence") or "").strip()
+    if not evidence:
+        evidence = "Commercial availability was not established."
+    out: dict[str, Any] = {
+        "status": status,
+        "evidence": evidence,
+    }
+    references = _source_references(
+        licensing.get("sources_used") or [],
+        evidence_items,
+    )
+    if references:
+        out["references"] = references
+    return out
 
 
 def _source_references(

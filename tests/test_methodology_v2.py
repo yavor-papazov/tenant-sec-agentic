@@ -193,6 +193,11 @@ def test_challenger_downgrade_cannot_rewrite_claim_bundle():
         "evidence": "Official evidence supports managed CMKs.",
         "confidence": "high",
         "sources_used": ["https://example.com/docs/cmk"],
+        "licensing": {
+            "status": "paid_add_on",
+            "evidence": "Enterprise key management tier required.",
+            "sources_used": ["https://example.com/docs/cmk"],
+        },
         **_claims(),
     }
     skeptic = {
@@ -404,12 +409,18 @@ def test_canonical_entry_retains_sources_and_validates(tmp_path):
         "evidence": "API accepts a customer key identifier.",
         "confidence": "high",
         "sources_used": ["https://example.com/docs/cmk"],
+        "licensing": {
+            "status": "paid_add_on",
+            "evidence": "Enterprise key management tier required.",
+            "sources_used": ["https://example.com/docs/cmk"],
+        },
         **_claims(),
     }
     entry = control_entry_for_provider_schema(
         "assessed", 2, assessor, None, "high"
     )
     assert entry["references"][0]["url"] == "https://example.com/docs/cmk"
+    assert entry["licensing"]["status"] == "paid_add_on"
     errors = validate_control_against_provider_schema(
         CANONICAL,
         config.provider.slug,

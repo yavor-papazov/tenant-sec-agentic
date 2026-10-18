@@ -85,6 +85,17 @@ class CriterionResult(BaseModel):
     claim_ids: list[str] = Field(default_factory=list)
 
 
+class LicensingObservation(BaseModel):
+    status: Literal[
+        "included",
+        "paid_add_on",
+        "contract_dependent",
+        "unknown",
+    ] = "unknown"
+    evidence: str = "Commercial availability was not established."
+    sources_used: list[str] = Field(default_factory=list)
+
+
 class AssessorStructured(BaseModel):
     status: AssessmentStatus
     score: int | Literal["mixed"] | None = Field(
@@ -95,6 +106,9 @@ class AssessorStructured(BaseModel):
     )
     services: dict[str, ServiceScore] = Field(default_factory=dict)
     evidence: str
+    licensing: LicensingObservation = Field(
+        default_factory=LicensingObservation
+    )
     confidence: Literal["high", "medium", "low"] = "low"
     flags: list[str] = Field(default_factory=list)
     deep_research_recommended: bool = False

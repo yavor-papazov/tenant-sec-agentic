@@ -1401,6 +1401,11 @@ def _not_assessed_for_retrieval(
         "score": None,
         "services": {},
         "evidence": evidence,
+        "licensing": {
+            "status": "unknown",
+            "evidence": "Commercial availability was not assessed.",
+            "sources_used": [],
+        },
         "confidence": "low",
         "flags": [f"retrieval-{outcome}"],
         "deep_research_recommended": False,
@@ -1651,6 +1656,11 @@ def _mock_assessor(control_def: dict[str, Any], cfg: AssessmentConfig) -> dict[s
         "score": None,
         "services": {},
         "evidence": "Mock pipeline run — no authoritative documentation.",
+        "licensing": {
+            "status": "unknown",
+            "evidence": "Commercial availability was not assessed.",
+            "sources_used": [],
+        },
         "confidence": "low",
         "flags": ["mock-mode"],
         "deep_research_recommended": False,

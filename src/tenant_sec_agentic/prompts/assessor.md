@@ -25,7 +25,10 @@ RULES:
 5. Every assessed result must list the exact supporting URLs in `sources_used`.
    Per-service results must do the same. Do not cite search snippets as evidence.
 6. Set deep_research_recommended true when confidence is low and name what to verify.
-7. For an assessed result, build the methodology 2.0 claim chain:
+7. Record commercial availability separately in `licensing`: included,
+   paid_add_on, contract_dependent, or unknown, with evidence and URLs.
+   Licensing must never raise or lower the L0-L3 score.
+8. For an assessed result, build the methodology 2.0 claim chain:
    - `evidence_items`: one entry per decisive source excerpt. Use stable ids
      `ev-...`, exact URLs, titles, source class, a verbatim quote, and affected
      service ids. Never invent a quote.
