@@ -132,15 +132,15 @@ def _config(tmp_path: Path) -> AssessmentConfig:
     )
 
 
-def test_example_uses_vertex_hybrid_models():
+def test_example_uses_verified_vertex_baseline():
     config = load_assessment_config(ROOT / "assessment-config.example.yaml")
-    assert config.model_for("doc_fetch").endswith("gemini-3.5-flash")
-    assert config.model_for("assessor").endswith("gemini-3.5-flash")
-    assert config.model_for("consistency").endswith("gemini-3.5-flash")
+    assert config.model_for("doc_fetch").endswith("gemini-2.5-flash")
+    assert config.model_for("assessor").endswith("gemini-2.5-flash")
+    assert config.model_for("consistency").endswith("gemini-2.5-flash")
     assert config.limits.max_parallel_assessments == 1
-    assert config.vertex_traffic_class == "priority"
+    assert config.vertex_traffic_class == "standard"
     restored = config_from_state(config_to_serializable(config))
-    assert restored.vertex_traffic_class == "priority"
+    assert restored.vertex_traffic_class == "standard"
     assert (
         restored.limits.model_timeout_seconds
         == config.limits.model_timeout_seconds

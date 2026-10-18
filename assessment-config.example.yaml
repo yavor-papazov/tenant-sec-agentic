@@ -30,16 +30,16 @@ controls:
   #   - "gov.preventive-policy"
 
 models:
-  doc_fetch: "vertex_ai/gemini-3.5-flash"
-  assessor: "vertex_ai/gemini-3.5-flash"
-  skeptic: "vertex_ai/gemini-3.5-flash"
-  consistency: "vertex_ai/gemini-3.5-flash"
-  deep_research: "vertex_ai/gemini-3.5-flash"
+  doc_fetch: "vertex_ai/gemini-2.5-flash"
+  assessor: "vertex_ai/gemini-2.5-flash"
+  skeptic: "vertex_ai/gemini-2.5-flash"
+  consistency: "vertex_ai/gemini-2.5-flash"
+  deep_research: "vertex_ai/gemini-2.5-flash"
 
-# Priority PayGo is designed for agentic workflows and avoids Standard PayGo's
-# ramp-up/acceleration limits. Use a supported endpoint (global, us, or eu);
-# GOOGLE_CLOUD_LOCATION and VERTEXAI_LOCATION select it. Priority costs more.
-vertex_traffic_class: "priority"
+# Global Standard has produced stable structured responses in this project.
+# Priority remains supported as an explicit opt-in after a structured-output
+# canary passes for the selected model and endpoint.
+vertex_traffic_class: "standard"
 
 pricing:
   vertex_ai/gemini-2.5-flash: { input_per_million: 0.54, output_per_million: 4.50 }

@@ -30,10 +30,9 @@ Copy `assessment-config.example.yaml` to `assessment-config.yaml` (gitignored), 
   completed retrieval and assessor stages instead of paying to repeat them.
 - `limits` are hard stops for calls, tokens, retries, searches, fetches, and
   projected model cost. The pilot requires `max_parallel_assessments: 1`.
-- The live pilot uses Vertex Gemini 3.5 Flash for every role. Live endpoint
-  probes for this project confirmed true Priority service for that model on
-  `eu`; Gemini 2.5 Flash was unavailable there and Gemini 3.5 Flash-Lite was
-  downgraded to Standard capacity.
+- The verified baseline uses Vertex Gemini 2.5 Flash with Standard traffic on
+  the `global` endpoint. Treat any other model, endpoint, or traffic class as
+  opt-in until it passes the structured-output canary.
 
 ## Run pipeline
 
@@ -92,17 +91,15 @@ enables Vertex AI and Cloud Billing Budgets APIs, grants the selected principal
 $15 alerting budget, and writes non-secret Vertex variables to `.env`. It does
 not create a project, link billing, or perform interactive authentication.
 
-The example demonstrates Vertex **Priority PayGo**. Google documents this
-traffic class for agentic workflows; it provides immediate baseline throughput
-without a Provisioned Throughput commitment, at a premium over Standard PayGo.
-Priority supports the `global`, `us`, and `eu` endpoints.
+The provider configs and example use Gemini 2.5 Flash with Standard traffic on
+the `global` endpoint. Live probes found repeated timeouts, malformed output,
+or empty structured responses from Gemini 3.5 Flash Priority routes, while the
+global 2.5 Standard route responded correctly. Set both
+`GOOGLE_CLOUD_LOCATION` and `VERTEXAI_LOCATION` to the selected endpoint and
+keep the pricing table aligned with the chosen model and traffic class.
 
-The RC1 provider configs use Gemini 2.5 Flash with Standard traffic on the
-`global` endpoint. Live recovery probes found repeated timeouts and malformed
-structured output from Gemini 3.5 Flash on the `eu` Priority route, while the
-global 2.5 route responded promptly. Set both `GOOGLE_CLOUD_LOCATION` and
-`VERTEXAI_LOCATION` to the selected endpoint and keep the pricing table aligned
-with the chosen model and traffic class.
+Priority PayGo remains supported by the runtime for an explicit, canary-tested
+configuration; it is not the default.
 
 Use a dedicated billed project and configure its budget controls first. Cloud
 Billing budgets are normally alerts, not hard caps; the pipeline's
