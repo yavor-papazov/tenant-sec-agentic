@@ -68,11 +68,11 @@ class AssessmentConfig:
 
     def model_for(self, role: str) -> str:
         defaults = {
-            "doc_fetch": "vertex_ai/gemini-3.5-flash",
-            "consistency": "vertex_ai/gemini-3.5-flash",
-            "assessor": "vertex_ai/gemini-3.5-flash",
-            "skeptic": "vertex_ai/gemini-3.5-flash",
-            "deep_research": "vertex_ai/gemini-3.5-flash",
+            "doc_fetch": "vertex_ai/gemini-2.5-flash",
+            "consistency": "vertex_ai/gemini-2.5-flash",
+            "assessor": "vertex_ai/gemini-2.5-flash",
+            "skeptic": "vertex_ai/gemini-2.5-flash",
+            "deep_research": "vertex_ai/gemini-2.5-flash",
         }
         return self.models.get(role, defaults.get(role, defaults["assessor"]))
 

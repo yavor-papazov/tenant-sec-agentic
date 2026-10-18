@@ -56,7 +56,8 @@ Session DB: `session.database_path` (ADK `DatabaseSessionService`).
 Requires an existing `providers/{slug}.yaml` in the tenant-sec repo (for `services_in_scope` and merge). Approved assessments update controls via:
 
 ```bash
-tenant-sec-aggregate --repo-root /path/to/tenant-sec --provider scaleway \
+tenant-sec-aggregate --repo-root /path/to/tenant-sec \
+  --config /path/to/scaleway-config.yaml --provider scaleway \
   --assessments-dir /path/to/assessments
 ```
 

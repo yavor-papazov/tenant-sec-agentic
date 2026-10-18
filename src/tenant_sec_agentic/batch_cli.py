@@ -5,17 +5,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 import yaml
 
-from tenant_sec_agentic.artifacts import validate_internal_assessment
+from tenant_sec_agentic.artifacts import validate_release_ready_assessment
 from tenant_sec_agentic.config import AssessmentConfig, load_assessment_config
-from tenant_sec_agentic.pipeline import prompt_hashes
+from tenant_sec_agentic.model_preflight import (
+    ModelPreflightError,
+    preflight_model_routes,
+)
+from tenant_sec_agentic.pipeline import (
+    current_assessment_input_hashes,
+    prompt_hashes,
+)
 from tenant_sec_agentic.repo import load_all_controls, resolve_control_scope
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -176,7 +185,14 @@ def artifact_is_current(
     hashes = artifact.get("prompt_hashes") or {}
     if any(hashes.get(key) != value for key, value in prompt_hashes().items()):
         return False
-    return not validate_internal_assessment(artifact)
+    inputs = artifact.get("input_hashes") or {}
+    expected_inputs = current_assessment_input_hashes(cfg, control_id)
+    if not expected_inputs or any(
+        inputs.get(key) != value
+        for key, value in expected_inputs.items()
+    ):
+        return False
+    return not validate_release_ready_assessment(artifact)
 
 
 def _fresh_usage(
@@ -256,6 +272,10 @@ async def _run_control(
                 "--session-database",
                 str(session_path),
                 cwd=ROOT,
+                env={
+                    **os.environ,
+                    "TENANT_SEC_MODEL_PREFLIGHTED": "1",
+                },
                 stdout=output,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -386,6 +406,52 @@ async def _run(args: argparse.Namespace) -> int:
     configs = [path.resolve() for path in args.config]
     loaded_configs = [load_assessment_config(path) for path in configs]
     tracker = BudgetTracker(args.ledger.resolve(), args.budget_usd)
+    model_preflight: list[dict[str, str]] = []
+    preflight_signatures: set[tuple[Any, ...]] = set()
+    try:
+        for config in loaded_configs:
+            signature = (
+                tuple(
+                    sorted(
+                        {
+                            config.model_for(role)
+                            for role in (
+                                "doc_fetch",
+                                "assessor",
+                                "skeptic",
+                                "consistency",
+                                "deep_research",
+                            )
+                        }
+                    )
+                ),
+                config.vertex_traffic_class,
+                os.environ.get("VERTEXAI_PROJECT")
+                or os.environ.get("GOOGLE_CLOUD_PROJECT"),
+                os.environ.get("VERTEXAI_LOCATION")
+                or os.environ.get("GOOGLE_CLOUD_LOCATION")
+                or "global",
+            )
+            if signature in preflight_signatures:
+                continue
+            preflight_signatures.add(signature)
+            for result in preflight_model_routes(config):
+                if result not in model_preflight:
+                    model_preflight.append(result)
+    except ModelPreflightError as exc:
+        summary = {
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "model_preflight": model_preflight,
+            "charged_total_usd": tracker.charged_usd,
+            "ready_for_review": 0,
+            "failed": [],
+            "status": "preflight_failed",
+            "error": str(exc),
+        }
+        tracker.data["summary"] = summary
+        tracker._write()
+        print(json.dumps(summary, indent=2), flush=True)
+        return 2
     semaphore = asyncio.Semaphore(args.provider_parallelism)
     assessment_semaphore = asyncio.Semaphore(
         min(
@@ -415,6 +481,7 @@ async def _run(args: argparse.Namespace) -> int:
     ]
     summary = {
         "finished_at": datetime.now(timezone.utc).isoformat(),
+        "model_preflight": model_preflight,
         "charged_total_usd": tracker.charged_usd,
         "ready_for_review": sum(
             len(result["completed"]) for result in results
@@ -428,6 +495,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_dotenv()
     parser = argparse.ArgumentParser(
         description="Run resumable full-scope provider assessments"
     )

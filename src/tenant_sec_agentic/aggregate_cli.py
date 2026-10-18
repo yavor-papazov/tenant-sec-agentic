@@ -13,11 +13,16 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 from tenant_sec_agentic.artifacts import (
+    assessment_review_payload_digest,
     canonicalize_service_map,
     control_entry_for_provider_schema,
-    validate_internal_assessment,
+    validate_release_ready_assessment,
 )
-from tenant_sec_agentic.pipeline import prompt_hashes
+from tenant_sec_agentic.config import load_assessment_config
+from tenant_sec_agentic.pipeline import (
+    current_assessment_input_hashes,
+    prompt_hashes,
+)
 from tenant_sec_agentic.repo import load_all_controls
 
 ASSESSOR_ID = re.compile(
@@ -35,8 +40,28 @@ def load_assessments(folder: Path) -> list[dict]:
     return out
 
 
-def approved_entry(a: dict) -> tuple[bool, dict | None]:
+def approved_entry(
+    a: dict,
+    expected_input_hashes: dict[str, str] | None = None,
+) -> tuple[bool, dict | None]:
+    if validate_release_ready_assessment(a):
+        return False, None
+    hashes = a.get("prompt_hashes") or {}
+    if any(
+        hashes.get(stage) != digest
+        for stage, digest in prompt_hashes().items()
+    ):
+        return False, None
+    if expected_input_hashes is not None:
+        inputs = a.get("input_hashes") or {}
+        if not expected_input_hashes or any(
+            inputs.get(name) != digest
+            for name, digest in expected_input_hashes.items()
+        ):
+            return False, None
     rev = a.get("review") or {}
+    if rev.get("payload_digest") != assessment_review_payload_digest(a):
+        return False, None
     st = rev.get("status")
     if st == "approved":
         result_status = str(a.get("result_status") or "unknown")
@@ -55,17 +80,29 @@ def approved_entry(a: dict) -> tuple[bool, dict | None]:
         adj = rev.get("adjusted_score")
         if adj is None:
             return False, None
-        assessor = dict(a.get("assessor") or {})
-        assessor["evidence"] = str(
-            rev.get("adjustment_reasoning") or assessor.get("evidence", "")
+        assessor = rev.get("adjusted_assessor")
+        if not isinstance(assessor, dict):
+            return False, None
+        assessor = dict(assessor)
+        services = rev.get("adjusted_services") if adj == "mixed" else None
+        probe = dict(a)
+        probe.update(
+            {
+                "status": "needs_human_review",
+                "result_status": "assessed",
+                "recommended_score": adj,
+                "recommended_services": services,
+                "assessor": assessor,
+            }
         )
+        if validate_release_ready_assessment(probe):
+            return False, None
         if adj == "mixed":
-            services = rev.get("adjusted_services") or {}
             entry = control_entry_for_provider_schema(
                 "assessed",
                 "mixed",
                 assessor,
-                services,
+                services or {},
                 str(a.get("overall_confidence") or "low"),
             )
         else:
@@ -80,7 +117,10 @@ def approved_entry(a: dict) -> tuple[bool, dict | None]:
     return False, None
 
 
-def provisional_entry(a: dict) -> tuple[bool, dict | None]:
+def provisional_entry(
+    a: dict,
+    expected_input_hashes: dict[str, str] | None = None,
+) -> tuple[bool, dict | None]:
     """Convert a current, valid recommendation without claiming review."""
     if a.get("status") != "needs_human_review":
         return False, None
@@ -90,7 +130,14 @@ def provisional_entry(a: dict) -> tuple[bool, dict | None]:
         for stage, digest in prompt_hashes().items()
     ):
         return False, None
-    if validate_internal_assessment(a):
+    if expected_input_hashes is not None:
+        inputs = a.get("input_hashes") or {}
+        if not expected_input_hashes or any(
+            inputs.get(name) != digest
+            for name, digest in expected_input_hashes.items()
+        ):
+            return False, None
+    if validate_release_ready_assessment(a):
         return False, None
     return True, control_entry_for_provider_schema(
         str(a.get("result_status") or "unknown"),
@@ -104,6 +151,7 @@ def provisional_entry(a: dict) -> tuple[bool, dict | None]:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Aggregate assessments to provider profile")
     p.add_argument("--repo-root", type=Path, required=True)
+    p.add_argument("--config", type=Path, required=True)
     p.add_argument("--provider", type=str, required=True)
     p.add_argument(
         "--assessments-dir",
@@ -129,6 +177,13 @@ def main(argv: list[str] | None = None) -> None:
 
     repo = args.repo_root.resolve()
     slug = args.provider
+    cfg = load_assessment_config(args.config.resolve())
+    if cfg.provider.slug != slug:
+        p.error(
+            f"config provider {cfg.provider.slug!r} does not match {slug!r}"
+        )
+    if cfg.paths.repo_root.resolve() != repo:
+        p.error("config repo_root does not match --repo-root")
     adir = args.assessments_dir or (repo.parent / "assessments")
     adir = adir.resolve()
     prov_folder = adir / slug
@@ -143,9 +198,10 @@ def main(argv: list[str] | None = None) -> None:
         if not cid:
             continue
         rev = (a.get("review") or {}).get("status")
-        ok, entry = approved_entry(a)
+        expected_inputs = current_assessment_input_hashes(cfg, str(cid))
+        ok, entry = approved_entry(a, expected_inputs)
         if not ok and args.provisional_unreviewed:
-            ok, entry = provisional_entry(a)
+            ok, entry = provisional_entry(a, expected_inputs)
         if ok and entry:
             controls[cid] = entry
         else:

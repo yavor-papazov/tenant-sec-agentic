@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,8 +8,11 @@ from google.adk.models import Gemini
 from pydantic import ValidationError
 
 from tenant_sec_agentic.artifacts import (
+    assessment_review_payload_digest,
     control_entry_for_provider_schema,
     validate_control_against_provider_schema,
+    validate_release_ready_assessment,
+    write_assessment_files,
 )
 from tenant_sec_agentic.config import (
     AssessmentConfig,
@@ -29,8 +33,16 @@ from tenant_sec_agentic.pipeline import (
     _mock_assessor,
     _normalize_fetched_documents,
     _normalize_service_evidence,
+    _reconcile_skeptic,
+    _retrieval_outcome,
+    current_assessment_input_hashes,
     prompt_hashes,
 )
+from tenant_sec_agentic.model_preflight import (
+    ModelPreflightError,
+    preflight_model_routes,
+)
+import tenant_sec_agentic.batch_cli as batch_cli
 from tenant_sec_agentic.aggregate_cli import approved_entry, provisional_entry
 from tenant_sec_agentic.batch_cli import (
     BudgetTracker,
@@ -174,7 +186,7 @@ def test_consistency_flags_accept_level_labels():
     assert flag.current_score == "L3"
 
 
-def test_challenger_downgrade_preserves_claim_traceability():
+def test_challenger_downgrade_cannot_rewrite_claim_bundle():
     assessor = {
         "status": "assessed",
         "score": 2,
@@ -195,14 +207,109 @@ def test_challenger_downgrade_preserves_claim_traceability():
         skeptic,
         None,
     )
-    assert (status, score) == ("assessed", 1)
+    assert (status, score) == ("conflicting", None)
     assert final["claims"] == assessor["claims"]
     assert final["evidence_items"] == assessor["evidence_items"]
-    assert final["sources_used"] == [
-        "https://example.com/docs/cmk",
-        "https://example.com/docs/limits",
-    ]
-    assert final["criteria_results"][2]["met"] is False
+    assert "Unresolved independent challenge" in final["evidence"]
+
+
+def test_unresolved_challenge_is_not_silently_published():
+    assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Initial assessment.",
+        "confidence": "high",
+        **_claims(),
+    }
+    skeptic = {
+        "verdict": "flag_deep_research",
+        "reasoning": "The decisive service scope is unresolved.",
+    }
+    status, score, services, confidence, final = _final_recommendation(
+        assessor,
+        skeptic,
+        None,
+    )
+    assert (status, score, services, confidence) == (
+        "conflicting",
+        None,
+        None,
+        "low",
+    )
+    assert final["status"] == "conflicting"
+
+
+def test_deep_research_revision_requires_post_research_challenge():
+    revised = {
+        "status": "assessed",
+        "score": 3,
+        "evidence": "Revised assessment.",
+        "confidence": "high",
+        **_claims(),
+    }
+    status, score, _, _, _ = _final_recommendation(
+        revised,
+        None,
+        {"revised_assessment": revised},
+    )
+    assert (status, score) == ("conflicting", None)
+
+    status, score, _, _, final = _final_recommendation(
+        revised,
+        None,
+        {
+            "revised_assessment": revised,
+            "post_research_skeptic": {"verdict": "confirm"},
+        },
+    )
+    assert (status, score) == ("assessed", 3)
+    assert final is revised
+
+
+def test_mixed_service_disagreement_cannot_confirm_by_equal_average():
+    assessor = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "a": {"status": "assessed", "score": 3},
+            "b": {"status": "assessed", "score": 1},
+        },
+    }
+    independent = {
+        "status": "assessed",
+        "score": "mixed",
+        "services": {
+            "a": {"status": "assessed", "score": 1},
+            "b": {"status": "assessed", "score": 3},
+        },
+    }
+    reconciled = _reconcile_skeptic(assessor, independent)
+    assert reconciled["verdict"] == "flag_deep_research"
+
+
+def test_equal_score_with_open_skeptic_question_requires_research():
+    assessor = {"status": "assessed", "score": 2}
+    independent = {
+        "status": "assessed",
+        "score": 2,
+        "reasoning": "The score may hold.",
+        "skepticism_flags": [],
+        "deep_research_questions": ["Verify managed database coverage."],
+    }
+    reconciled = _reconcile_skeptic(assessor, independent)
+    assert reconciled["verdict"] == "flag_deep_research"
+
+
+def test_explicit_retrieval_error_is_never_assessed():
+    assert (
+        _retrieval_outcome(
+            {
+                "doc_quality": "error",
+                "docs_fetched": [{"url": "https://example.com/partial"}],
+            }
+        )
+        == "failed"
+    )
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
@@ -316,6 +423,52 @@ def test_canonical_entry_retains_sources_and_validates(tmp_path):
     assert errors == []
 
 
+def test_release_validation_rejects_score_and_bundle_mismatch():
+    artifact = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "assessed",
+        "recommended_score": 3,
+        "recommended_services": None,
+        "doc_fetch": {"retrieval_outcome": "succeeded"},
+        "prompt_hashes": prompt_hashes(),
+        "assessor": {
+            "status": "assessed",
+            "score": 2,
+            "evidence": "Supported.",
+            **_claims(),
+        },
+    }
+    errors = validate_release_ready_assessment(artifact)
+    assert "final assessor score differs from recommended score" in errors
+    assert (
+        "recommended score must equal highest supported met criterion"
+        in errors
+    )
+
+
+def test_validation_failure_is_written_to_canonical_retry_path(tmp_path):
+    assessment = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+    }
+    yaml_path, _ = write_assessment_files(
+        assessments_dir=tmp_path / "assessments",
+        reports_dir=tmp_path / "reports",
+        provider_slug="scaleway",
+        control_id="enc.cmk",
+        assessment=assessment,
+        control_def={"name": "CMK", "criteria": {}},
+        schema_errors=["score mismatch"],
+    )
+    assert yaml_path.name == "enc.cmk.yaml"
+    stored = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    assert stored["status"] == "validation_error"
+    assert not yaml_path.with_suffix(".invalid.yaml").exists()
+
+
 def test_usage_ledger_is_per_role_control_and_fails_closed(tmp_path):
     config = _config(tmp_path)
     config.mock_mode = False
@@ -368,7 +521,7 @@ def test_metered_model_counts_each_adk_model_turn(tmp_path, monkeypatch):
         role="assessor",
         control_id="iam.mfa-enforcement",
     )
-    assert model.model == "gemini-3.5-flash"
+    assert model.model == "gemini-2.5-flash"
     assert model._vertex_headers()[
         "X-Vertex-AI-LLM-Shared-Request-Type"
     ] == "priority"
@@ -430,6 +583,7 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
             "status": "assessed",
             "score": 2,
             "evidence": "Supported by official documentation.",
+            "sources_used": ["https://example.com/docs/cmk"],
             **_claims(),
         },
     }
@@ -444,6 +598,48 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
     )
     assert checkpoint is not None
     assert checkpoint[1]["score"] == 2
+
+
+def test_validation_artifact_resumes_from_raw_assessor(tmp_path):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    raw_assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Supported by official documentation.",
+        "confidence": "high",
+        "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
+    }
+    artifact = {
+        "status": "validation_error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {"doc_fetch": "docs", "assessor": "assessor"},
+        "doc_fetch": {
+            "retrieval_outcome": "succeeded",
+            "docs_fetched": [{"url": "https://example.com/docs/cmk"}],
+            "doc_quality": "adequate",
+        },
+        "assessor": {
+            "status": "conflicting",
+            "score": None,
+            "evidence": "Derived bundle failed validation.",
+        },
+        "assessor_raw": raw_assessor,
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_stage_checkpoint(
+        config,
+        "enc.cmk",
+        {"doc_fetch": "docs", "assessor": "assessor"},
+    )
+    assert checkpoint is not None
+    assert checkpoint[1] == raw_assessor
 
 
 def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
@@ -483,16 +679,87 @@ def test_batch_runner_recognizes_current_review_artifact(tmp_path):
         "assessment_id": config.provider.assessment_id,
         "methodology_version": "2.0",
         "prompt_hashes": prompt_hashes(),
+        "input_hashes": current_assessment_input_hashes(
+            config, "enc.cmk"
+        ),
         "result_status": "assessed",
         "recommended_score": 2,
         "status": "needs_human_review",
-        "assessor": _claims(),
+        "assessor": {
+            "status": "assessed",
+            "score": 2,
+            "evidence": "Supported.",
+            **_claims(),
+        },
     }
     (artifact_dir / "enc.cmk.yaml").write_text(
         yaml.safe_dump(artifact),
         encoding="utf-8",
     )
     assert artifact_is_current(config, "enc.cmk") is True
+    artifact["input_hashes"]["control_definition"] = "stale"
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    assert artifact_is_current(config, "enc.cmk") is False
+
+
+def test_model_preflight_validates_structured_response(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    config.mock_mode = False
+    monkeypatch.setenv("VERTEXAI_PROJECT", "tenantsec")
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    calls = []
+
+    class Models:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(parsed={"status": "ready"}, text=None)
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.models = Models()
+
+    results = preflight_model_routes(config, client_factory=Client)
+    assert results == [
+        {
+            "model": "gemini-2.5-flash",
+            "location": "global",
+            "traffic_class": "standard",
+            "status": "ready",
+        }
+    ]
+    assert len(calls) == 1
+
+
+def test_batch_preflight_fails_before_any_budget_reservation(
+    tmp_path, monkeypatch
+):
+    config = _config(tmp_path)
+    config.mock_mode = False
+    monkeypatch.setattr(
+        batch_cli,
+        "load_assessment_config",
+        lambda _: config,
+    )
+    monkeypatch.setattr(
+        batch_cli,
+        "preflight_model_routes",
+        lambda _: (_ for _ in ()).throw(ModelPreflightError("bad route")),
+    )
+    args = SimpleNamespace(
+        config=[tmp_path / "provider.yaml"],
+        ledger=tmp_path / "ledger.json",
+        budget_usd=10.0,
+    )
+    import asyncio
+
+    assert asyncio.run(batch_cli._run(args)) == 2
+    ledger = yaml.safe_load(args.ledger.read_text(encoding="utf-8"))
+    assert ledger["runs"] == []
+    assert ledger["summary"]["status"] == "preflight_failed"
 
 
 def test_batch_budget_reservations_fail_closed(tmp_path):
@@ -656,16 +923,34 @@ def test_review_bundle_surfaces_claims_and_skeptic_flags():
 
 
 def test_review_manifest_applies_explicit_decision(tmp_path):
+    config = _config(tmp_path)
     artifact_path = tmp_path / "enc.cmk.yaml"
-    artifact_path.write_text(
-        yaml.safe_dump(
-            {
-                "control": "enc.cmk",
-                "review": {"status": "pending"},
-            }
+    artifact = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "assessed",
+        "recommended_score": 2,
+        "recommended_services": None,
+        "doc_fetch": {"retrieval_outcome": "succeeded"},
+        "prompt_hashes": prompt_hashes(),
+        "input_hashes": current_assessment_input_hashes(
+            config,
+            "enc.cmk",
         ),
+        "assessor": {
+            "status": "assessed",
+            "score": 2,
+            "evidence": "Supported.",
+            **_claims(),
+        },
+        "review": {"status": "pending"},
+    }
+    artifact_path.write_text(
+        yaml.safe_dump(artifact),
         encoding="utf-8",
     )
+    artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     manifest_path = tmp_path / "review.yaml"
     manifest_path.write_text(
         yaml.safe_dump(
@@ -674,6 +959,7 @@ def test_review_manifest_applies_explicit_decision(tmp_path):
                     {
                         "control": "enc.cmk",
                         "artifact_path": str(artifact_path),
+                        "artifact_digest": artifact_digest,
                         "decision": "approved",
                         "notes": "Evidence checked.",
                     }
@@ -682,10 +968,20 @@ def test_review_manifest_applies_explicit_decision(tmp_path):
         ),
         encoding="utf-8",
     )
-    assert apply_manifest(manifest_path, "human:reviewer") == (1, 0)
+    assert apply_manifest(
+        manifest_path,
+        "human:reviewer",
+        config,
+    ) == (1, 0)
     reviewed = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
     assert reviewed["review"]["status"] == "approved"
     assert reviewed["review"]["reviewer"] == "human:reviewer"
+    assert reviewed["review"]["payload_digest"]
+    assert approved_entry(reviewed)[0] is True
+    reviewed["assessor"]["evidence"] = "Tampered after approval."
+    assert approved_entry(reviewed) == (False, None)
+    with pytest.raises(ValueError, match="artifact changed"):
+        apply_manifest(manifest_path, "human:reviewer", config)
 
 
 def test_release_check_rejects_silent_or_untraceable_results():
@@ -719,22 +1015,73 @@ def test_release_check_rejects_silent_or_untraceable_results():
 
 
 def test_approved_unknown_survives_aggregation_without_score():
-    ok, entry = approved_entry(
-        {
-            "result_status": "unknown",
-            "recommended_score": None,
-            "overall_confidence": "low",
-            "assessor": {
-                "evidence": "Documentation was insufficient.",
-                "sources_used": ["https://example.com/thin"],
-            },
-            "review": {"status": "approved"},
-        }
+    artifact = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "unknown",
+        "recommended_score": None,
+        "recommended_services": None,
+        "overall_confidence": "low",
+        "doc_fetch": {"retrieval_outcome": "succeeded"},
+        "prompt_hashes": prompt_hashes(),
+        "assessor": {
+            "status": "unknown",
+            "score": None,
+            "evidence": "Documentation was insufficient.",
+            "sources_used": ["https://example.com/thin"],
+        },
+        "review": {"status": "approved"},
+    }
+    artifact["review"]["payload_digest"] = (
+        assessment_review_payload_digest(artifact)
     )
+    ok, entry = approved_entry(artifact)
     assert ok is True
     assert entry["status"] == "unknown"
     assert "score" not in entry
     assert entry["references"][0]["url"] == "https://example.com/thin"
+    assert approved_entry(
+        artifact,
+        {"control_definition": "changed"},
+    ) == (False, None)
+
+
+def test_adjustment_cannot_publish_stale_claim_criteria():
+    original = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "L2 is supported.",
+        "confidence": "high",
+        "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
+    }
+    adjusted = dict(original)
+    adjusted["score"] = 1
+    artifact = {
+        "control": "enc.cmk",
+        "provider": "scaleway",
+        "status": "needs_human_review",
+        "result_status": "assessed",
+        "recommended_score": 2,
+        "recommended_services": None,
+        "overall_confidence": "high",
+        "doc_fetch": {"retrieval_outcome": "succeeded"},
+        "prompt_hashes": prompt_hashes(),
+        "assessor": original,
+        "review": {
+            "status": "adjusted",
+            "adjusted_score": 1,
+            "adjusted_services": None,
+            "adjusted_assessor": adjusted,
+            "adjustment_reasoning": "Human adjustment.",
+        },
+    }
+    artifact["review"]["payload_digest"] = (
+        assessment_review_payload_digest(artifact)
+    )
+    ok, entry = approved_entry(artifact)
+    assert (ok, entry) == (False, None)
 
 
 def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
@@ -744,9 +1091,13 @@ def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
         "status": "needs_human_review",
         "result_status": "unknown",
         "recommended_score": None,
+        "recommended_services": None,
         "overall_confidence": "low",
         "prompt_hashes": prompt_hashes(),
+        "doc_fetch": {"retrieval_outcome": "succeeded"},
         "assessor": {
+            "status": "unknown",
+            "score": None,
             "evidence": "Official documentation was insufficient.",
             "sources_used": ["https://example.com/thin"],
         },

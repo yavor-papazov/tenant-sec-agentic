@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -17,6 +19,26 @@ from jsonschema import FormatChecker
 from tenant_sec_agentic import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def assessment_review_payload_digest(data: dict[str, Any]) -> str:
+    """Bind a review decision to all assessment and decision content."""
+    payload = {
+        key: value
+        for key, value in data.items()
+        if not str(key).startswith("_")
+    }
+    review = dict(payload.get("review") or {})
+    review.pop("payload_digest", None)
+    payload["review"] = review
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def canonical_service_id(
@@ -80,6 +102,7 @@ def build_assessment_yaml(
     methodology_version: str,
     doc_fetch: dict[str, Any],
     assessor: dict[str, Any],
+    assessor_raw: dict[str, Any] | None,
     skeptic: dict[str, Any] | None,
     consistency: dict[str, Any] | None,
     deep_research: dict[str, Any] | None,
@@ -89,6 +112,8 @@ def build_assessment_yaml(
     overall_confidence: str,
     status: str,
     prompt_hashes: dict[str, str],
+    input_hashes: dict[str, str],
+    retrieval_outcome: str,
     error_detail: str | None = None,
 ) -> dict[str, Any]:
     assessed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -106,7 +131,9 @@ def build_assessment_yaml(
         "assessed_at": assessed_at,
         "session_id": session_id,
         "prompt_hashes": prompt_hashes,
+        "input_hashes": input_hashes,
         "doc_fetch": {
+            "retrieval_outcome": retrieval_outcome,
             "urls_consulted": urls,
             "doc_quality": doc_fetch.get("doc_quality", "absent"),
             "services_with_docs": doc_fetch.get("services_with_docs", []),
@@ -114,6 +141,7 @@ def build_assessment_yaml(
             "docs_fetched": doc_fetch.get("docs_fetched", []),
         },
         "assessor": assessor,
+        "assessor_raw": assessor_raw,
         "skeptic": skeptic,
         "consistency": consistency,
         "deep_research": deep_research,
@@ -128,8 +156,10 @@ def build_assessment_yaml(
             "reviewed_at": None,
             "adjusted_score": None,
             "adjusted_services": None,
+            "adjusted_assessor": None,
             "adjustment_reasoning": None,
             "notes": None,
+            "payload_digest": None,
         },
     }
     if error_detail:
@@ -168,6 +198,115 @@ def validate_internal_assessment(data: dict[str, Any]) -> list[str]:
     return errs
 
 
+def validate_release_ready_assessment(data: dict[str, Any]) -> list[str]:
+    """Validate the final, publishable assessment bundle fail-closed."""
+    errs = validate_internal_assessment(data)
+    if data.get("status") != "needs_human_review":
+        errs.append("release-ready assessment must need human review")
+
+    result_status = data.get("result_status")
+    score = data.get("recommended_score")
+    assessor = data.get("assessor")
+    if not isinstance(assessor, dict):
+        return [*errs, "final assessor bundle is missing"]
+    if assessor.get("status") != result_status:
+        errs.append("final assessor status differs from recommended status")
+    if assessor.get("score") != score:
+        errs.append("final assessor score differs from recommended score")
+
+    retrieval = str(
+        ((data.get("doc_fetch") or {}).get("retrieval_outcome") or "")
+    )
+    if retrieval in {"failed", "exhausted"} and result_status != "not_assessed":
+        errs.append(
+            f"retrieval outcome {retrieval} requires not_assessed result"
+        )
+    if result_status != "assessed":
+        return errs
+
+    claims = {
+        str(claim.get("id")): claim
+        for claim in assessor.get("claims") or []
+        if isinstance(claim, dict) and claim.get("id")
+    }
+    evidence_items = {
+        str(item.get("id")): item
+        for item in assessor.get("evidence_items") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    for claim_id, claim in claims.items():
+        if claim.get("result") != "supported":
+            continue
+        evidence_ids = list(claim.get("evidence_item_ids") or [])
+        if not evidence_ids:
+            errs.append(f"supported claim {claim_id!r} has no evidence")
+        for evidence_id in evidence_ids:
+            if str(evidence_id) not in evidence_items:
+                errs.append(
+                    f"supported claim {claim_id!r} cites missing evidence "
+                    f"{evidence_id!r}"
+                )
+        linked = [
+            evidence_items[str(evidence_id)]
+            for evidence_id in evidence_ids
+            if str(evidence_id) in evidence_items
+        ]
+        if linked and all(
+            item.get("source_class") in {"support", "secondary"}
+            for item in linked
+        ):
+            errs.append(
+                f"supported claim {claim_id!r} relies only on weak sources"
+            )
+    met_levels: list[int] = []
+    for criterion in assessor.get("criteria_results") or []:
+        if not isinstance(criterion, dict) or not criterion.get("met"):
+            continue
+        level = criterion.get("level")
+        if isinstance(level, int):
+            met_levels.append(level)
+        claim_ids = list(criterion.get("claim_ids") or [])
+        if not claim_ids:
+            errs.append(f"met L{level} criterion has no claims")
+        for claim_id in claim_ids:
+            claim = claims.get(str(claim_id))
+            if not claim or claim.get("result") != "supported":
+                errs.append(
+                    f"met L{level} criterion cites non-supported claim "
+                    f"{claim_id!r}"
+                )
+    if isinstance(score, int):
+        if not met_levels or max(met_levels) != score:
+            errs.append(
+                "recommended score must equal highest supported met criterion"
+            )
+    elif score == "mixed":
+        supported_claims = [
+            claim
+            for claim in claims.values()
+            if claim.get("result") == "supported"
+        ]
+        for service_id, service in (
+            data.get("recommended_services") or {}
+        ).items():
+            if isinstance(service, int):
+                service = {"status": "assessed", "score": service}
+            if not isinstance(service, dict):
+                continue
+            if service.get("status") != "assessed":
+                continue
+            if not any(
+                not claim.get("services")
+                or service_id in (claim.get("services") or [])
+                for claim in supported_claims
+            ):
+                errs.append(
+                    f"assessed service {service_id!r} has no applicable "
+                    "supported claim"
+                )
+    return errs
+
+
 def control_entry_for_provider_schema(
     result_status: str,
     recommended_score: Any,
@@ -179,7 +318,10 @@ def control_entry_for_provider_schema(
     """Single control block for provider.schema.json."""
     verified = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     evidence = str(assessor.get("evidence") or "").strip()
-    sources = _source_references(assessor.get("sources_used") or [])
+    evidence_items = list(assessor.get("evidence_items") or [])
+    sources = _source_references(
+        assessor.get("sources_used") or [], evidence_items
+    )
     if result_status != "assessed":
         out = {
             "status": result_status,
@@ -226,7 +368,8 @@ def control_entry_for_provider_schema(
             service_refs = _source_references(
                 value.get("sources_used")
                 or source_service.get("sources_used")
-                or []
+                or [],
+                evidence_items,
             )
             if service_refs:
                 service_entry["references"] = service_refs
@@ -264,7 +407,15 @@ def _claim_bundle(assessor: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _source_references(urls: list[Any]) -> list[dict[str, str]]:
+def _source_references(
+    urls: list[Any],
+    evidence_items: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    titles = {
+        str(item.get("url") or "").strip(): str(item.get("title") or "").strip()
+        for item in (evidence_items or [])
+        if isinstance(item, dict)
+    }
     seen: set[str] = set()
     references = []
     for value in urls:
@@ -272,7 +423,11 @@ def _source_references(urls: list[Any]) -> list[dict[str, str]]:
         if not url or url in seen:
             continue
         seen.add(url)
-        references.append({"url": url, "title": url})
+        title = titles.get(url)
+        if not title or title == url:
+            hostname = urlsplit(url).hostname or "Provider"
+            title = f"{hostname} documentation"
+        references.append({"url": url, "title": title})
     return references
 
 
@@ -338,18 +493,17 @@ def write_assessment_files(
 
     base = assessments_dir / provider_slug / f"{control_id}.yaml"
     if schema_errors:
-        inv = base.with_suffix(".invalid.yaml")
-        inv.parent.mkdir(parents=True, exist_ok=True)
+        base.parent.mkdir(parents=True, exist_ok=True)
         assessment = dict(assessment)
         assessment["status"] = "validation_error"
         assessment["schema_validation_errors"] = schema_errors
-        inv.write_text(yaml.safe_dump(assessment, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        base.write_text(yaml.safe_dump(assessment, sort_keys=False, allow_unicode=True), encoding="utf-8")
         html_path = prov_reports / f"{control_id}.html"
         html_path.write_text(
             render_control_html(control_def, assessment, schema_errors),
             encoding="utf-8",
         )
-        return inv, html_path
+        return base, html_path
 
     base.parent.mkdir(parents=True, exist_ok=True)
     base.write_text(yaml.safe_dump(assessment, sort_keys=False, allow_unicode=True), encoding="utf-8")

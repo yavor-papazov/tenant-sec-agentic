@@ -17,6 +17,8 @@ RULES:
 3. Missing or insufficient authoritative documentation is `unknown`, never L0.
    L0 requires affirmative official evidence that the capability is unavailable,
    a reproducible interface/live test, or provider confirmation.
+   If the retrieval stage itself failed or fetched no documents, return
+   `not_assessed`, not `unknown`.
 4. If service_scoped is true, assess each in-scope service. A mixed result may
    contain assessed and explicit non-score service states. If no service can be
    assessed, return a top-level `unknown` result without a score.
@@ -31,7 +33,8 @@ RULES:
      supported/unsupported/contradicted, evidence item ids, and service ids.
    - `criteria_results`: exactly one result for each numeric level 0, 1, 2,
      and 3. State whether that criterion is met, why, and the supporting claim
-     ids. The recommended score must follow these results.
+     ids. A met criterion must cite at least one supported claim. The
+     recommended numeric score must be exactly the highest met criterion.
    Evidence-item and claim ids may contain only lowercase letters, digits, and
    hyphens after their prefix.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,11 +11,21 @@ from typing import Any
 
 import yaml
 
-from tenant_sec_agentic.artifacts import validate_internal_assessment
-from tenant_sec_agentic.pipeline import prompt_hashes
+from tenant_sec_agentic.artifacts import validate_release_ready_assessment
+from tenant_sec_agentic.config import (
+    AssessmentConfig,
+    load_assessment_config,
+)
+from tenant_sec_agentic.pipeline import (
+    current_assessment_input_hashes,
+    prompt_hashes,
+)
 
 
-def _load_current(folder: Path) -> list[dict[str, Any]]:
+def _load_current(
+    folder: Path,
+    cfg: AssessmentConfig,
+) -> list[dict[str, Any]]:
     expected_hashes = prompt_hashes()
     artifacts: list[dict[str, Any]] = []
     for path in sorted(folder.glob("*.yaml")):
@@ -26,11 +37,22 @@ def _load_current(folder: Path) -> list[dict[str, Any]]:
         hashes = data.get("prompt_hashes") or {}
         if any(hashes.get(key) != value for key, value in expected_hashes.items()):
             continue
+        control_id = str(data.get("control") or "")
+        input_hashes = data.get("input_hashes") or {}
+        expected_inputs = current_assessment_input_hashes(cfg, control_id)
+        if not expected_inputs or any(
+            input_hashes.get(key) != value
+            for key, value in expected_inputs.items()
+        ):
+            continue
         if data.get("status") != "needs_human_review":
             continue
-        if validate_internal_assessment(data):
+        if validate_release_ready_assessment(data):
             continue
         data["_artifact_path"] = str(path)
+        data["_artifact_digest"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
         artifacts.append(data)
     return artifacts
 
@@ -141,11 +163,13 @@ def _manifest(provider: str, artifacts: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "control": item.get("control"),
                 "artifact_path": item.get("_artifact_path"),
+                "artifact_digest": item.get("_artifact_digest"),
                 "recommended_score": item.get("recommended_score"),
                 "confidence": item.get("overall_confidence"),
                 "decision": "pending",
                 "adjusted_score": None,
                 "adjusted_services": None,
+                "adjusted_assessor": None,
                 "reasoning": None,
                 "notes": None,
             }
@@ -161,12 +185,32 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--assessments-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--provider", action="append", required=True)
+    parser.add_argument(
+        "--config",
+        action="append",
+        required=True,
+        metavar="PROVIDER=PATH",
+        help="Provider config mapping; repeat for each provider",
+    )
     args = parser.parse_args(argv)
 
+    config_paths: dict[str, Path] = {}
+    for value in args.config:
+        provider, separator, raw_path = value.partition("=")
+        if not separator or not provider or not raw_path:
+            parser.error("--config must use PROVIDER=PATH")
+        config_paths[provider] = Path(raw_path).resolve()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     for provider in args.provider:
-        artifacts = _load_current(args.assessments_dir.resolve() / provider)
+        config_path = config_paths.get(provider)
+        if config_path is None:
+            parser.error(f"missing --config mapping for {provider}")
+        cfg = load_assessment_config(config_path)
+        artifacts = _load_current(
+            args.assessments_dir.resolve() / provider,
+            cfg,
+        )
         markdown_path = output_dir / f"{provider}.md"
         manifest_path = output_dir / f"{provider}.yaml"
         markdown_path.write_text(

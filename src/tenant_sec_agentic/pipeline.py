@@ -29,12 +29,18 @@ from tenant_sec_agentic.artifacts import (
     control_entry_for_provider_schema,
     validate_control_against_provider_schema,
     validate_internal_assessment,
+    validate_release_ready_assessment,
     write_assessment_files,
     render_index_html,
 )
 from tenant_sec_agentic.config import AssessmentConfig, config_from_state, config_to_serializable
 from tenant_sec_agentic.metered_model import MeteredGemini
-from tenant_sec_agentic.repo import load_all_controls, resolve_control_scope
+from tenant_sec_agentic.repo import (
+    load_all_controls,
+    load_methodology_or_interim,
+    load_provider_profiles_scores,
+    resolve_control_scope,
+)
 from tenant_sec_agentic.schemas import (
     AssessorStructured,
     ConsistencyStructured,
@@ -76,6 +82,72 @@ def prompt_hashes() -> dict[str, str]:
         "consistency": _prompt_hash("consistency.md"),
         "deep_research": _prompt_hash("deep_research.md"),
     }
+
+
+def assessment_input_hashes(
+    cfg: AssessmentConfig,
+    control_def: dict[str, Any],
+    methodology_text: str,
+    methodology_version: str,
+    peer_profiles: dict[str, Any],
+) -> dict[str, str]:
+    control_id = str(control_def.get("id") or "")
+    peer_context = {
+        provider: (profile.get("controls") or {}).get(control_id)
+        for provider, profile in peer_profiles.items()
+    }
+    values: dict[str, Any] = {
+        "control_definition": control_def,
+        "methodology": {
+            "version": methodology_version,
+            "content": methodology_text,
+        },
+        "provider_scope": {
+            "slug": cfg.provider.slug,
+            "display_name": cfg.provider.display_name,
+            "docs_base_url": cfg.provider.docs_base_url,
+            "assessment_id": cfg.provider.assessment_id,
+            "offering": cfg.provider.offering,
+            "services_in_scope": cfg.provider.services_in_scope,
+        },
+        "peer_context": peer_context,
+    }
+    return {
+        key: hashlib.sha256(
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        for key, value in values.items()
+    }
+
+
+def current_assessment_input_hashes(
+    cfg: AssessmentConfig,
+    control_id: str,
+) -> dict[str, str]:
+    methodology_text, interim = load_methodology_or_interim(
+        cfg.paths.repo_root
+    )
+    controls = load_all_controls(cfg.paths.repo_root)
+    control_def = controls.get(control_id)
+    if not isinstance(control_def, dict):
+        return {}
+    peer_profiles = load_provider_profiles_scores(
+        cfg.paths.repo_root / "providers",
+        cfg.provider.slug,
+    )
+    return assessment_input_hashes(
+        cfg,
+        control_def,
+        methodology_text,
+        "interim-prd-4.4" if interim else "2.0",
+        peer_profiles,
+    )
 
 
 def _load_prompt(name: str) -> str:
@@ -155,6 +227,13 @@ class AssessmentPipeline(BaseAgent):
                 logger.error("missing control %s", cid)
                 item["status"] = "error"
                 continue
+            input_hashes = assessment_input_hashes(
+                cfg,
+                control_def,
+                methodology_text,
+                methodology_version,
+                peer_profiles,
+            )
 
             st["current_control_id"] = cid
             st["pipeline_mode"] = "doc_fetch"
@@ -173,6 +252,7 @@ class AssessmentPipeline(BaseAgent):
                 "doc_fetch_output",
                 "assessor_output",
                 "skeptic_output",
+                "post_research_skeptic_output",
                 "consistency_output",
                 "deep_research_output",
             ):
@@ -182,21 +262,26 @@ class AssessmentPipeline(BaseAgent):
             assessor_out: dict[str, Any] = {}
             skeptic_out: dict[str, Any] | None = None
             consistency_out: dict[str, Any] | None = None
+            checkpoint_skeptic: dict[str, Any] | None = None
+            checkpoint_consistency: dict[str, Any] | None = None
             deep_out: dict[str, Any] | None = None
+            checkpoint_deep: dict[str, Any] | None = None
             final_status = "needs_human_review"
             err_detail: str | None = None
             warning_detail: str | None = None
+            retrieval_outcome = "failed"
 
             try:
                 if cfg.mock_mode:
                     doc_fetch_out = _mock_doc_fetch(cfg, control_def)
+                    retrieval_outcome = _retrieval_outcome(doc_fetch_out)
+                    doc_fetch_out["retrieval_outcome"] = retrieval_outcome
                     st["doc_fetch_output"] = doc_fetch_out
-                    assessor_out = _mock_assessor(control_def, cfg)
-                    st["assessor_output"] = assessor_out
-                    skip_skeptic_m = (
-                        assessor_out.get("status") == "unknown"
-                        and doc_fetch_out.get("doc_quality") == "absent"
+                    assessor_out = _not_assessed_for_retrieval(
+                        retrieval_outcome
                     )
+                    st["assessor_output"] = assessor_out
+                    skip_skeptic_m = assessor_out.get("status") != "assessed"
                     if not skip_skeptic_m:
                         skeptic_out = _mock_skeptic(assessor_out)
                         st["skeptic_output"] = skeptic_out
@@ -210,11 +295,30 @@ class AssessmentPipeline(BaseAgent):
                         consistency_out = None
                         st.pop("consistency_output", None)
                 else:
-                    checkpoint = _load_stage_checkpoint(cfg, cid, hashes)
+                    checkpoint = _load_stage_checkpoint(
+                        cfg,
+                        cid,
+                        hashes,
+                        input_hashes,
+                    )
                     if checkpoint is not None:
-                        doc_fetch_out, assessor_out = checkpoint
+                        (
+                            doc_fetch_out,
+                            assessor_out,
+                            checkpoint_skeptic,
+                            checkpoint_consistency,
+                            checkpoint_deep,
+                        ) = checkpoint
+                        retrieval_outcome = str(
+                            doc_fetch_out.get("retrieval_outcome")
+                            or _retrieval_outcome(doc_fetch_out)
+                        )
+                        doc_fetch_out["retrieval_outcome"] = retrieval_outcome
                         st["doc_fetch_output"] = doc_fetch_out
                         st["assessor_output"] = assessor_out
+                        st[STATE_FETCHED_DOCUMENTS] = (
+                            _fetched_documents_from_bundle(doc_fetch_out)
+                        )
                         logger.info(
                             "resuming %s from doc-fetch/assessor checkpoint",
                             cid,
@@ -224,22 +328,46 @@ class AssessmentPipeline(BaseAgent):
                             ctx, cfg, methodology_text, control_def
                         )
                         doc_fetch_out = st.get("doc_fetch_output") or {}
-                        await self._run_assessor(
-                            ctx, cfg, methodology_text, control_def
-                        )
-                        assessor_out = st.get("assessor_output") or {}
+                        retrieval_outcome = _retrieval_outcome(doc_fetch_out)
+                        doc_fetch_out["retrieval_outcome"] = retrieval_outcome
+                        if retrieval_outcome in {"failed", "exhausted"}:
+                            assessor_out = _not_assessed_for_retrieval(
+                                retrieval_outcome
+                            )
+                            st["assessor_output"] = assessor_out
+                            err_detail = (
+                                "Evidence retrieval failed"
+                                if retrieval_outcome == "failed"
+                                else "Evidence retrieval exhausted without "
+                                "fetching a document"
+                            )
+                        else:
+                            await self._run_assessor(
+                                ctx, cfg, methodology_text, control_def
+                            )
+                            assessor_out = st.get("assessor_output") or {}
 
                     skip_skeptic = (
-                        assessor_out.get("status") == "unknown"
-                        and doc_fetch_out.get("doc_quality") == "absent"
+                        checkpoint_deep is not None
+                        or checkpoint_skeptic is not None
+                        or retrieval_outcome in {"failed", "exhausted"}
+                        or (
+                            assessor_out.get("status") != "assessed"
+                            and doc_fetch_out.get("doc_quality") == "absent"
+                        )
                     )
                     if not skip_skeptic:
                         await self._run_skeptic(ctx, cfg, control_def)
                         skeptic_out = st.get("skeptic_output") or {}
                     else:
-                        skeptic_out = None
+                        skeptic_out = checkpoint_skeptic
 
-                    skip_consistency = not peer_profiles
+                    skip_consistency = (
+                        checkpoint_deep is not None
+                        or checkpoint_consistency is not None
+                        or not peer_profiles
+                        or retrieval_outcome in {"failed", "exhausted"}
+                    )
                     if not skip_consistency:
                         try:
                             await self._run_consistency(
@@ -250,60 +378,155 @@ class AssessmentPipeline(BaseAgent):
                             )
                         except Exception as exc:
                             logger.exception(
-                                "optional consistency check failed for %s: %s",
+                                "required consistency check failed for %s: %s",
                                 cid,
                                 exc,
                             )
-                            warning_detail = (
-                                "Optional consistency check failed: "
+                            detail = (
+                                "Required consistency check failed: "
                                 f"{exc}"
+                            )
+                            err_detail = (
+                                f"{err_detail}; {detail}"
+                                if err_detail
+                                else detail
                             )
                             consistency_out = None
                     else:
-                        consistency_out = None
+                        consistency_out = checkpoint_consistency
 
-                    if _should_deep_research(
-                        st, cfg, assessor_out, skeptic_out, consistency_out
+                    if (
+                        not err_detail
+                        and retrieval_outcome
+                        not in {"failed", "exhausted"}
+                        and (
+                            checkpoint_deep is not None
+                            or _should_deep_research(
+                                st,
+                                cfg,
+                                assessor_out,
+                                skeptic_out,
+                                consistency_out,
+                            )
+                        )
                     ):
-                        used = int(st.get("deep_research_invocations", 0))
-                        if used < cfg.limits.max_deep_research_per_run:
-                            st["deep_research_invocations"] = used + 1
-                            st["pipeline_mode"] = "deep_research"
-                            st["deep_research_max_search"] = (
-                                cfg.limits.max_search_calls_per_deep_research
+                        if checkpoint_deep is not None:
+                            deep_out = checkpoint_deep
+                            deep_out.pop("post_research_skeptic", None)
+                            st["deep_research_output"] = deep_out
+                            logger.info(
+                                "resuming %s from completed deep research",
+                                cid,
                             )
-                            st["deep_research_max_fetch"] = (
-                                cfg.limits.max_fetch_calls_per_deep_research
+                        else:
+                            used = int(
+                                st.get("deep_research_invocations", 0)
                             )
-                            st.pop(STATE_DEEP_SEARCH_COUNT, None)
-                            st.pop(STATE_DEEP_FETCH_COUNT, None)
-                            try:
-                                await self._run_deep_research(
-                                    ctx, cfg, control_def
+                            if used >= cfg.limits.max_deep_research_per_run:
+                                err_detail = (
+                                    "Required deep research was not run "
+                                    "because the per-run limit was exhausted"
                                 )
-                                deep_out = st.get("deep_research_output")
-                            except Exception as exc:
-                                logger.exception(
-                                    "optional deep research failed for %s: %s",
-                                    cid,
-                                    exc,
+                            else:
+                                st["deep_research_invocations"] = used + 1
+                                st["pipeline_mode"] = "deep_research"
+                                st["deep_research_max_search"] = (
+                                    cfg.limits
+                                    .max_search_calls_per_deep_research
                                 )
-                                detail = (
-                                    "Optional deep research failed: "
-                                    f"{exc}"
+                                st["deep_research_max_fetch"] = (
+                                    cfg.limits
+                                    .max_fetch_calls_per_deep_research
                                 )
-                                warning_detail = (
-                                    f"{warning_detail}; {detail}"
-                                    if warning_detail
-                                    else detail
+                                st.pop(STATE_DEEP_SEARCH_COUNT, None)
+                                st.pop(STATE_DEEP_FETCH_COUNT, None)
+                                try:
+                                    await self._run_deep_research(
+                                        ctx, cfg, control_def
+                                    )
+                                    deep_out = st.get(
+                                        "deep_research_output"
+                                    )
+                                    _sync_fetched_documents(
+                                        doc_fetch_out,
+                                        st.get(STATE_FETCHED_DOCUMENTS)
+                                        or {},
+                                    )
+                                except Exception as exc:
+                                    logger.exception(
+                                        "required deep research failed for "
+                                        "%s: %s",
+                                        cid,
+                                        exc,
+                                    )
+                                    err_detail = (
+                                        "Required deep research failed: "
+                                        f"{exc}"
+                                    )
+                                    deep_out = None
+
+                        if deep_out is not None and not err_detail:
+                            revised = deep_out.get("revised_assessment")
+                            if not (
+                                isinstance(revised, dict)
+                                and revised.get("status")
+                            ):
+                                err_detail = (
+                                    "Required deep research did not produce "
+                                    "a revised assessment"
                                 )
-                                deep_out = None
+                            else:
+                                try:
+                                    await (
+                                        self
+                                        ._run_post_research_skeptic(
+                                            ctx,
+                                            cfg,
+                                            control_def,
+                                            deep_out,
+                                        )
+                                    )
+                                    independent = (
+                                        st.get(
+                                            "post_research_skeptic_output"
+                                        )
+                                        or {}
+                                    )
+                                    challenge = _reconcile_skeptic(
+                                        revised,
+                                        independent,
+                                    )
+                                    deep_out[
+                                        "post_research_skeptic"
+                                    ] = challenge
+                                    if challenge.get("verdict") != "confirm":
+                                        err_detail = (
+                                            "Post-research independent "
+                                            "challenge remains unresolved"
+                                        )
+                                except Exception as exc:
+                                    logger.exception(
+                                        "post-research challenge failed for "
+                                        "%s: %s",
+                                        cid,
+                                        exc,
+                                    )
+                                    err_detail = (
+                                        "Post-research challenge failed: "
+                                        f"{exc}"
+                                    )
 
             except Exception as e:
                 logger.exception("control %s failed: %s", cid, e)
                 item["status"] = "error"
                 final_status = "error"
                 err_detail = str(e)
+
+            if retrieval_outcome in {"failed", "exhausted"}:
+                assessor_out = _not_assessed_for_retrieval(
+                    retrieval_outcome,
+                    err_detail if retrieval_outcome == "failed" else None,
+                )
 
             result_status, rec_score, rec_services, conf, final_assessor = (
                 _final_recommendation(
@@ -349,7 +572,8 @@ class AssessmentPipeline(BaseAgent):
                 session_id=ctx.session.id,
                 methodology_version=methodology_version,
                 doc_fetch=doc_fetch_out,
-                assessor=assessor_out,
+                assessor=final_assessor,
+                assessor_raw=assessor_out,
                 skeptic=skeptic_out,
                 consistency=consistency_out,
                 deep_research=deep_out,
@@ -359,11 +583,28 @@ class AssessmentPipeline(BaseAgent):
                 overall_confidence=conf,
                 status=assessment_status,
                 prompt_hashes=hashes,
+                input_hashes=input_hashes,
+                retrieval_outcome=retrieval_outcome,
                 error_detail=err_detail or warning_detail,
             )
             internal_errs = validate_internal_assessment(assessment)
             if internal_errs:
                 logger.warning("internal validation: %s", internal_errs)
+            release_errs = (
+                []
+                if err_detail
+                else validate_release_ready_assessment(assessment)
+            )
+            validation_errs = [
+                *schema_errs,
+                *(internal_errs if err_detail else release_errs),
+            ]
+            if validation_errs:
+                logger.error(
+                    "release validation failed for %s: %s",
+                    cid,
+                    validation_errs,
+                )
 
             write_assessment_files(
                 assessments_dir=cfg.paths.assessments_dir,
@@ -372,12 +613,16 @@ class AssessmentPipeline(BaseAgent):
                 control_id=cid,
                 assessment=assessment,
                 control_def=control_def,
-                schema_errors=schema_errs,
+                schema_errors=validation_errs,
             )
-            if schema_errs:
+            if validation_errs:
                 assessment["status"] = "validation_error"
 
-            item["status"] = "completed" if not err_detail else "error"
+            item["status"] = (
+                "completed"
+                if not err_detail and not validation_errs
+                else "error"
+            )
             yield Event(
                 invocation_id=ctx.invocation_id,
                 author=self.name,
@@ -475,6 +720,10 @@ class AssessmentPipeline(BaseAgent):
         )
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "assessor")
         output = ctx.session.state.get("assessor_output")
+        if not isinstance(output, dict) or not output.get("status"):
+            raise RuntimeError(
+                "assessor agent produced no structured output"
+            )
         if isinstance(output, dict) and output.get("status") == "assessed":
             fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
             ctx.session.state["assessor_output"] = _enrich_claim_bundle(
@@ -510,7 +759,11 @@ class AssessmentPipeline(BaseAgent):
             f"{json.dumps(docs, default=str)}```"
         )
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "skeptic")
-        independent = ctx.session.state.get("skeptic_output") or {}
+        independent = ctx.session.state.get("skeptic_output")
+        if not isinstance(independent, dict) or not independent.get("status"):
+            raise RuntimeError(
+                "skeptic agent produced no structured output"
+            )
         ctx.session.state["skeptic_output"] = _reconcile_skeptic(
             ctx.session.state.get("assessor_output") or {},
             independent,
@@ -547,6 +800,70 @@ class AssessmentPipeline(BaseAgent):
             f"{json.dumps(peer_scores, indent=2, default=str)}"
         )
         await _inject_user_and_drain(agent, ctx, user_text, cfg, "consistency")
+        output = ctx.session.state.get("consistency_output")
+        if (
+            not isinstance(output, dict)
+            or not output.get("overall_consistency")
+        ):
+            raise RuntimeError(
+                "consistency agent produced no structured output"
+            )
+
+    async def _run_post_research_skeptic(
+        self,
+        ctx: InvocationContext,
+        cfg: AssessmentConfig,
+        control_def: dict[str, Any],
+        deep_output: dict[str, Any],
+    ) -> None:
+        """Challenge a revised result without exposing its recommendation."""
+        skeptic_prompt = _load_prompt("skeptic.md")
+        model = _metered_model(ctx, cfg, "skeptic")
+        agent = LlmAgent(
+            name="post_research_skeptic_agent",
+            model=model,
+            instruction=skeptic_prompt,
+            output_schema=SkepticStructured,
+            output_key="post_research_skeptic_output",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
+        )
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+        documents = [
+            {
+                "url": url,
+                "title": value.get("title"),
+                "content": value.get("content"),
+            }
+            for url, value in fetched.items()
+            if isinstance(value, dict) and value.get("content")
+        ]
+        user_text = (
+            f"CONTROL YAML:\n```yaml\n"
+            f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            "DOCUMENTATION BUNDLE INCLUDING DEEP-RESEARCH SOURCES:\n"
+            f"```json\n{json.dumps(documents, default=str)}```\n"
+            "QUESTIONS INVESTIGATED:\n"
+            f"```json\n"
+            f"{json.dumps(deep_output.get('questions_investigated') or [], default=str)}```\n"
+            "UNRESOLVED ITEMS:\n"
+            f"```json\n"
+            f"{json.dumps(deep_output.get('unresolved') or [], default=str)}```"
+        )
+        await _inject_user_and_drain(
+            agent,
+            ctx,
+            user_text,
+            cfg,
+            "post_research_skeptic",
+        )
+        output = ctx.session.state.get("post_research_skeptic_output")
+        if not isinstance(output, dict) or not output.get("status"):
+            raise RuntimeError(
+                "post-research skeptic produced no structured output"
+            )
 
     async def _run_deep_research(
         self,
@@ -586,18 +903,24 @@ class AssessmentPipeline(BaseAgent):
             "deep_research",
         )
         output = ctx.session.state.get("deep_research_output")
+        if not isinstance(output, dict):
+            raise RuntimeError(
+                "deep research agent produced no structured output"
+            )
         revised = (
             output.get("revised_assessment")
             if isinstance(output, dict)
             else None
         )
-        if isinstance(revised, dict) and revised.get("status") == "assessed":
-            fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-            output["revised_assessment"] = _enrich_claim_bundle(
-                revised,
-                cfg,
-                fetched,
-            )
+        if isinstance(revised, dict) and revised.get("status"):
+            if revised.get("status") == "assessed":
+                fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+                revised = _enrich_claim_bundle(
+                    revised,
+                    cfg,
+                    fetched,
+                )
+                output["revised_assessment"] = revised
             ctx.session.state["deep_research_output"] = output
 
 
@@ -662,7 +985,14 @@ def _load_stage_checkpoint(
     cfg: AssessmentConfig,
     control_id: str,
     hashes: dict[str, str],
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    input_hashes: dict[str, str] | None = None,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+] | None:
     """Recover completed core stages from a matching failed artifact."""
     if not cfg.session.resume_artifacts:
         return None
@@ -677,18 +1007,35 @@ def _load_stage_checkpoint(
         artifact = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return None
-    if not isinstance(artifact, dict) or artifact.get("status") != "error":
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("status") not in {"error", "validation_error"}
+    ):
         return None
     if artifact.get("assessment_id") != cfg.provider.assessment_id:
         return None
     saved_hashes = artifact.get("prompt_hashes") or {}
     if any(
-        saved_hashes.get(stage) != hashes.get(stage)
+        not hashes.get(stage)
+        or saved_hashes.get(stage) != hashes.get(stage)
         for stage in ("doc_fetch", "assessor")
     ):
         return None
+    peer_context_current = True
+    if input_hashes is not None:
+        saved_inputs = artifact.get("input_hashes") or {}
+        if any(
+            saved_inputs.get(name) != digest
+            for name, digest in input_hashes.items()
+            if name != "peer_context"
+        ):
+            return None
+        peer_context_current = (
+            saved_inputs.get("peer_context")
+            == input_hashes.get("peer_context")
+        )
     docs = artifact.get("doc_fetch")
-    assessor = artifact.get("assessor")
+    assessor = artifact.get("assessor_raw") or artifact.get("assessor")
     if not isinstance(docs, dict) or not isinstance(assessor, dict):
         return None
     if not docs.get("docs_fetched") or not assessor.get("status"):
@@ -703,7 +1050,115 @@ def _load_stage_checkpoint(
         != {0, 1, 2, 3}
     ):
         return None
-    return docs, assessor
+    result_status = str(assessor.get("status") or "unknown")
+    score = assessor.get("score")
+    services = assessor.get("services") if score == "mixed" else None
+    probe = {
+        "control": control_id,
+        "provider": cfg.provider.slug,
+        "status": "needs_human_review",
+        "result_status": result_status,
+        "recommended_score": score,
+        "recommended_services": services,
+        "doc_fetch": docs,
+        "assessor": assessor,
+    }
+    if validate_release_ready_assessment(probe):
+        return None
+    entry = control_entry_for_provider_schema(
+        result_status,
+        score,
+        assessor,
+        services,
+        str(assessor.get("confidence") or "low"),
+        cfg.provider.services_in_scope,
+    )
+    if validate_control_against_provider_schema(
+        cfg.paths.repo_root,
+        cfg.provider.slug,
+        cfg.provider.display_name,
+        cfg.provider.assessment_id,
+        cfg.provider.offering,
+        cfg.provider.services_in_scope,
+        control_id,
+        entry,
+    ):
+        return None
+    skeptic: dict[str, Any] | None = None
+    stored_skeptic = artifact.get("skeptic")
+    if (
+        hashes.get("skeptic")
+        and saved_hashes.get("skeptic") == hashes.get("skeptic")
+        and isinstance(stored_skeptic, dict)
+        and stored_skeptic.get("status")
+        and stored_skeptic.get("verdict")
+    ):
+        skeptic = stored_skeptic
+
+    consistency: dict[str, Any] | None = None
+    stored_consistency = artifact.get("consistency")
+    if (
+        hashes.get("consistency")
+        and saved_hashes.get("consistency") == hashes.get("consistency")
+        and peer_context_current
+        and isinstance(stored_consistency, dict)
+        and stored_consistency.get("overall_consistency")
+    ):
+        consistency = stored_consistency
+
+    deep: dict[str, Any] | None = None
+    stored_deep = artifact.get("deep_research")
+    if (
+        all(
+            hashes.get(stage)
+            and saved_hashes.get(stage) == hashes.get(stage)
+            for stage in ("skeptic", "consistency", "deep_research")
+        )
+        and peer_context_current
+        and isinstance(stored_deep, dict)
+        and isinstance(stored_deep.get("revised_assessment"), dict)
+    ):
+        revised = stored_deep["revised_assessment"]
+        revised_status = str(revised.get("status") or "unknown")
+        revised_score = revised.get("score")
+        revised_services = (
+            revised.get("services")
+            if revised_score == "mixed"
+            else None
+        )
+        revised_probe = {
+            "control": control_id,
+            "provider": cfg.provider.slug,
+            "status": "needs_human_review",
+            "result_status": revised_status,
+            "recommended_score": revised_score,
+            "recommended_services": revised_services,
+            "doc_fetch": docs,
+            "assessor": revised,
+        }
+        revised_entry = control_entry_for_provider_schema(
+            revised_status,
+            revised_score,
+            revised,
+            revised_services,
+            str(revised.get("confidence") or "low"),
+            cfg.provider.services_in_scope,
+        )
+        if (
+            not validate_release_ready_assessment(revised_probe)
+            and not validate_control_against_provider_schema(
+                cfg.paths.repo_root,
+                cfg.provider.slug,
+                cfg.provider.display_name,
+                cfg.provider.assessment_id,
+                cfg.provider.offering,
+                cfg.provider.services_in_scope,
+                control_id,
+                revised_entry,
+            )
+        ):
+            deep = stored_deep
+    return docs, assessor, skeptic, consistency, deep
 
 
 def _enrich_claim_bundle(
@@ -837,6 +1292,8 @@ def _should_deep_research(
         return True
     if skeptic and skeptic.get("verdict") == "flag_deep_research":
         return True
+    if skeptic and skeptic.get("verdict") == "downgrade":
+        return True
     if consistency and consistency.get("deep_research_triggered"):
         return True
     return False
@@ -851,65 +1308,107 @@ def _final_recommendation(
 
     revised = (deep or {}).get("revised_assessment")
     if isinstance(revised, dict) and revised.get("status"):
-        status = str(revised["status"])
-        score = revised.get("score")
-        services = revised.get("services") if score == "mixed" else None
-        return (
-            status,
-            score,
-            services,
-            str(revised.get("confidence") or conf),
+        post_research = (deep or {}).get("post_research_skeptic")
+        if not isinstance(post_research, dict):
+            return _conflicting_recommendation(
+                revised,
+                "Deep-research revision has no independent challenge.",
+            )
+        return _apply_skeptic_recommendation(
             revised,
+            post_research,
+            str(revised.get("confidence") or conf),
         )
 
-    if skeptic and skeptic.get("verdict") == "downgrade":
-        status = str(skeptic.get("recommended_status") or "unknown")
-        score = skeptic.get("recommended_score")
-        services = (
-            skeptic.get("recommended_services")
-            if score == "mixed"
-            else None
-        )
-        merged = dict(assessor)
-        merged["status"] = status
-        merged["score"] = score
-        if score == "mixed":
-            merged["services"] = services or {}
-        challenge = str(skeptic.get("reasoning") or "").strip()
-        if challenge:
-            merged["evidence"] = (
-                str(assessor.get("evidence") or "").strip()
-                + "\n\nIndependent challenge: "
-                + challenge
-            ).strip()
-        merged["sources_used"] = list(
-            dict.fromkeys(
-                [
-                    *list(assessor.get("sources_used") or []),
-                    *list(skeptic.get("sources_used") or []),
-                ]
-            )
-        )
-        if isinstance(score, int):
-            criteria = []
-            for criterion in assessor.get("criteria_results") or []:
-                revised = dict(criterion)
-                level = revised.get("level")
-                if isinstance(level, int) and level > score:
-                    revised["met"] = False
-                    revised["reasoning"] = (
-                        "Independent challenger did not confirm this level. "
-                        + str(revised.get("reasoning") or "")
-                    ).strip()
-                    revised["claim_ids"] = []
-                criteria.append(revised)
-            merged["criteria_results"] = criteria
-        return status, score, services, conf, merged
+    if skeptic:
+        return _apply_skeptic_recommendation(assessor, skeptic, conf)
 
     status = str(assessor.get("status") or "unknown")
     score = assessor.get("score")
     services = assessor.get("services") if score == "mixed" else None
     return status, score, services, conf, assessor
+
+
+def _apply_skeptic_recommendation(
+    assessor: dict[str, Any],
+    skeptic: dict[str, Any],
+    confidence: str,
+) -> tuple[str, Any, dict[str, Any] | None, str, dict[str, Any]]:
+    verdict = skeptic.get("verdict")
+    if verdict == "flag_deep_research":
+        return _conflicting_recommendation(
+            assessor,
+            str(skeptic.get("reasoning") or "Independent challenge unresolved."),
+        )
+    if verdict == "downgrade":
+        return _conflicting_recommendation(
+            assessor,
+            str(
+                skeptic.get("reasoning")
+                or "Independent challenger recommended a lower result "
+                "without a revised claim bundle."
+            ),
+        )
+
+    status = str(assessor.get("status") or "unknown")
+    score = assessor.get("score")
+    services = assessor.get("services") if score == "mixed" else None
+    return status, score, services, confidence, assessor
+
+
+def _conflicting_recommendation(
+    assessor: dict[str, Any],
+    reason: str,
+) -> tuple[str, None, None, str, dict[str, Any]]:
+    final = dict(assessor)
+    final["status"] = "conflicting"
+    final["score"] = None
+    final.pop("services", None)
+    final["confidence"] = "low"
+    final["evidence"] = (
+        str(assessor.get("evidence") or "").strip()
+        + "\n\nUnresolved independent challenge: "
+        + reason.strip()
+    ).strip()
+    return "conflicting", None, None, "low", final
+
+
+def _retrieval_outcome(doc_fetch: dict[str, Any]) -> str:
+    if doc_fetch.get("doc_quality") == "error":
+        return "failed"
+    docs = list(doc_fetch.get("docs_fetched") or [])
+    if not docs:
+        return "exhausted"
+    if doc_fetch.get("services_without_docs"):
+        return "partial"
+    return "succeeded"
+
+
+def _not_assessed_for_retrieval(
+    outcome: str,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    evidence = (
+        "The evidence-retrieval stage failed; this control was not assessed."
+        if outcome == "failed"
+        else "The evidence-retrieval stage returned no documents; this "
+        "control was not assessed."
+    )
+    if detail:
+        evidence += f" Retrieval error: {detail}"
+    return {
+        "status": "not_assessed",
+        "score": None,
+        "services": {},
+        "evidence": evidence,
+        "confidence": "low",
+        "flags": [f"retrieval-{outcome}"],
+        "deep_research_recommended": False,
+        "sources_used": [],
+        "evidence_items": [],
+        "claims": [],
+        "criteria_results": [],
+    }
 
 
 def _normalize_fetched_documents(
@@ -943,6 +1442,49 @@ def _normalize_fetched_documents(
         )
         clean_documents.append(document)
     output["docs_fetched"] = clean_documents
+
+
+def _fetched_documents_from_bundle(
+    doc_fetch: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    return {
+        str(document["url"]): {
+            "title": str(document.get("title") or document["url"]),
+            "content": str(document["content"]),
+        }
+        for document in doc_fetch.get("docs_fetched") or []
+        if isinstance(document, dict)
+        and document.get("url")
+        and document.get("content")
+    }
+
+
+def _sync_fetched_documents(
+    doc_fetch: dict[str, Any],
+    fetched: dict[str, Any],
+) -> None:
+    """Persist all deep-research documents needed for retry enrichment."""
+    documents = list(doc_fetch.get("docs_fetched") or [])
+    by_url = {
+        str(document.get("url")): document
+        for document in documents
+        if isinstance(document, dict) and document.get("url")
+    }
+    for url, raw in fetched.items():
+        if not isinstance(raw, dict) or not raw.get("content"):
+            continue
+        document = {
+            "url": str(url),
+            "title": str(raw.get("title") or url),
+            "relevance": str(raw.get("relevance") or "high"),
+            "content": str(raw["content"]),
+        }
+        if str(url) in by_url:
+            by_url[str(url)].update(document)
+        else:
+            documents.append(document)
+            by_url[str(url)] = document
+    doc_fetch["docs_fetched"] = documents
 
 
 def _normalize_service_evidence(
@@ -1024,8 +1566,28 @@ def _reconcile_skeptic(
         out["deep_research_questions"] = questions
         return out
 
+    has_critical_flag = any(
+        isinstance(flag, dict) and flag.get("severity") == "critical"
+        for flag in independent.get("skepticism_flags") or []
+    )
+    has_open_questions = any(
+        str(question).strip()
+        for question in independent.get("deep_research_questions") or []
+    )
+    if has_critical_flag or has_open_questions:
+        out["verdict"] = "flag_deep_research"
+        return out
+
     assessor_value = _comparable_score(assessor)
     skeptic_value = _comparable_score(independent)
+    mixed_disagreement = (
+        assessor_status == "assessed"
+        and (
+            assessor.get("score") == "mixed"
+            or independent.get("score") == "mixed"
+        )
+        and _service_verdicts(assessor) != _service_verdicts(independent)
+    )
     if (
         assessor_status == "assessed"
         and assessor_value is not None
@@ -1036,7 +1598,7 @@ def _reconcile_skeptic(
         out["recommended_status"] = skeptic_status
         out["recommended_score"] = independent.get("score")
         out["recommended_services"] = independent.get("services") or {}
-    elif assessor_value != skeptic_value:
+    elif assessor_value != skeptic_value or mixed_disagreement:
         out["verdict"] = "flag_deep_research"
     else:
         out["verdict"] = "confirm"
@@ -1058,6 +1620,19 @@ def _comparable_score(result: dict[str, Any]) -> float | None:
         if values:
             return sum(values) / len(values)
     return None
+
+
+def _service_verdicts(
+    result: dict[str, Any],
+) -> dict[str, tuple[Any, Any]]:
+    return {
+        str(service_id): (
+            value.get("status"),
+            value.get("score"),
+        )
+        for service_id, value in (result.get("services") or {}).items()
+        if isinstance(value, dict)
+    }
 
 
 def _mock_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) -> dict[str, Any]:
@@ -1154,8 +1729,6 @@ def _write_dashboard(
 
 def initial_session_state(cfg: AssessmentConfig) -> dict[str, Any]:
     from tenant_sec_agentic.repo import (
-        load_methodology_or_interim,
-        load_provider_profiles_scores,
         validate_repo_layout,
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -15,6 +16,7 @@ from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
 from tenant_sec_agentic.config import load_assessment_config
+from tenant_sec_agentic.model_preflight import preflight_model_routes
 from tenant_sec_agentic.pipeline import AssessmentPipeline, initial_session_state
 
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +53,8 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
 
     cfg = load_assessment_config(args.config.resolve())
+    if os.environ.get("TENANT_SEC_MODEL_PREFLIGHTED") != "1":
+        preflight_model_routes(cfg)
     if args.session_database is not None:
         cfg.session.database_path = args.session_database.resolve()
     if args.controls:
