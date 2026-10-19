@@ -19,6 +19,7 @@ from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.genai import types
+from json_repair import repair_json
 from typing_extensions import override
 
 from tenant_sec_agentic import __version__
@@ -954,10 +955,26 @@ def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
         raise RuntimeError("deep research agent did not return a JSON object")
     try:
         parsed = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        try:
+            parsed = repair_json(
+                text[start : end + 1],
+                return_objects=True,
+            )
+        except Exception as repair_exc:
+            raise RuntimeError(
+                "deep research structured output was invalid: "
+                f"{exc}; repair failed: {repair_exc}"
+            ) from repair_exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError(
+                "deep research JSON repair did not produce an object"
+            ) from exc
+    try:
         return DeepResearchStructured.model_validate(parsed).model_dump(
             mode="json"
         )
-    except (json.JSONDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise RuntimeError(
             f"deep research structured output was invalid: {exc}"
         ) from exc

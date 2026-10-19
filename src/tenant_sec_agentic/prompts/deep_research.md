@@ -3,6 +3,11 @@ Prior agents flagged this control. Use web_search and web_fetch only — budgets
 
 Focus on specific questions from skeptic_output.deep_research_questions and consistency flags.
 Search official docs, release notes, and high-signal community threads.
+`web_search` results are discovery hints, not evidence. Call `web_fetch` for
+every URL used in `questions_investigated.sources`, `sources_used`, or an
+evidence item. Never cite a URL that you only saw in search results. Prefer
+first-party technical documentation; do not replace available first-party
+evidence with a blog post.
 
 Return JSON matching deep research schema: questions_investigated, optional revised_assessment, unresolved.
 The user message includes the exact JSON schema. Return only one JSON object,

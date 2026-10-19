@@ -342,6 +342,22 @@ def test_deep_research_json_is_parsed_without_adk_schema_tool():
     assert parsed["revised_assessment"] is None
 
 
+def test_deep_research_json_repairs_minor_model_syntax_errors():
+    parsed = _parse_deep_research_output(
+        """{
+          "questions_investigated": [{
+            "question": "Does the "grant" constraint exist?",
+            "answer": "Yes",
+            "sources": ["https://example.com/iam"],
+            "confidence": "high"
+          }],
+          "revised_assessment": null,
+          "unresolved": []
+        }"""
+    )
+    assert parsed["questions_investigated"][0]["answer"] == "Yes"
+
+
 def test_service_scoped_release_requires_complete_mixed_result():
     services = [{"id": "a"}, {"id": "b"}]
     assert _validate_service_scope_result(
