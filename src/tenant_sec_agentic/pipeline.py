@@ -552,6 +552,13 @@ class AssessmentPipeline(BaseAgent):
                 conf,
                 cfg.provider.services_in_scope,
             )
+            scope_errs = _validate_service_scope_result(
+                control_def,
+                result_status,
+                rec_score,
+                rec_services,
+                cfg.provider.services_in_scope,
+            )
             schema_errs = validate_control_against_provider_schema(
                 repo_root,
                 slug,
@@ -598,6 +605,7 @@ class AssessmentPipeline(BaseAgent):
                 else validate_release_ready_assessment(assessment)
             )
             validation_errs = [
+                *scope_errs,
                 *schema_errs,
                 *(internal_errs if err_detail else release_errs),
             ]
@@ -1415,6 +1423,44 @@ def _retrieval_outcome(doc_fetch: dict[str, Any]) -> str:
     if doc_fetch.get("services_without_docs"):
         return "partial"
     return "succeeded"
+
+
+def _validate_service_scope_result(
+    control_def: dict[str, Any],
+    result_status: str,
+    score: Any,
+    services: dict[str, Any] | None,
+    services_in_scope: list[dict[str, Any]],
+) -> list[str]:
+    is_service_scoped = bool(control_def.get("service_scoped"))
+    if result_status != "assessed":
+        return []
+    if is_service_scoped and score != "mixed":
+        return [
+            "service-scoped assessed result must use a per-service mixed score"
+        ]
+    if not is_service_scoped and score == "mixed":
+        return ["offering-scoped control must not use a mixed score"]
+    if not is_service_scoped:
+        return []
+    expected = {
+        str(service.get("id"))
+        for service in services_in_scope
+        if service.get("id")
+    }
+    actual = set(services or {})
+    errors = []
+    if missing := sorted(expected - actual):
+        errors.append(
+            "service-scoped result is missing services: "
+            + ", ".join(missing)
+        )
+    if extra := sorted(actual - expected):
+        errors.append(
+            "service-scoped result has out-of-scope services: "
+            + ", ".join(extra)
+        )
+    return errors
 
 
 def _not_assessed_for_retrieval(

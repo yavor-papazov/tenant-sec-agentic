@@ -36,6 +36,7 @@ from tenant_sec_agentic.pipeline import (
     _parse_deep_research_output,
     _reconcile_skeptic,
     _retrieval_outcome,
+    _validate_service_scope_result,
     current_assessment_input_hashes,
     prompt_hashes,
 )
@@ -339,6 +340,35 @@ def test_deep_research_json_is_parsed_without_adk_schema_tool():
     )
     assert parsed["questions_investigated"][0]["confidence"] == "unresolved"
     assert parsed["revised_assessment"] is None
+
+
+def test_service_scoped_release_requires_complete_mixed_result():
+    services = [{"id": "a"}, {"id": "b"}]
+    assert _validate_service_scope_result(
+        {"service_scoped": True},
+        "assessed",
+        3,
+        None,
+        services,
+    )
+    errors = _validate_service_scope_result(
+        {"service_scoped": True},
+        "assessed",
+        "mixed",
+        {"a": {"status": "assessed", "score": 3}},
+        services,
+    )
+    assert errors == ["service-scoped result is missing services: b"]
+    assert not _validate_service_scope_result(
+        {"service_scoped": True},
+        "assessed",
+        "mixed",
+        {
+            "a": {"status": "assessed", "score": 3},
+            "b": {"status": "unknown"},
+        },
+        services,
+    )
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
