@@ -111,6 +111,7 @@ def assessment_input_hashes(
             "services_in_scope": cfg.provider.services_in_scope,
         },
         "peer_context": peer_context,
+        "evidence_seeds": cfg.evidence_seeds.get(control_id, []),
     }
     return {
         key: hashlib.sha256(
@@ -255,6 +256,7 @@ class AssessmentPipeline(BaseAgent):
                 "post_research_skeptic_output",
                 "consistency_output",
                 "deep_research_output",
+                "deep_research_raw",
             ):
                 st.pop(k, None)
 
@@ -878,8 +880,7 @@ class AssessmentPipeline(BaseAgent):
             model=model,
             instruction=dr_prompt,
             tools=doc_fetch_tools(),
-            output_schema=DeepResearchStructured,
-            output_key="deep_research_output",
+            output_key="deep_research_raw",
             include_contents="default",
             generate_content_config=types.GenerateContentConfig(
                 max_output_tokens=cfg.limits.max_output_tokens_per_call
@@ -893,7 +894,9 @@ class AssessmentPipeline(BaseAgent):
             f"SKEPTIC QUESTIONS:\n```json\n"
             f"{json.dumps(ctx.session.state.get('skeptic_output') or {}, default=str)}```\n"
             f"CONSISTENCY FLAGS:\n```json\n"
-            f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```"
+            f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```\n"
+            "OUTPUT JSON SCHEMA:\n```json\n"
+            f"{json.dumps(DeepResearchStructured.model_json_schema(), default=str)}```"
         )
         await _inject_user_and_drain(
             agent,
@@ -902,11 +905,13 @@ class AssessmentPipeline(BaseAgent):
             cfg,
             "deep_research",
         )
-        output = ctx.session.state.get("deep_research_output")
+        raw_output = ctx.session.state.get("deep_research_raw")
+        output = _parse_deep_research_output(raw_output)
         if not isinstance(output, dict):
             raise RuntimeError(
                 "deep research agent produced no structured output"
             )
+        ctx.session.state["deep_research_output"] = output
         revised = (
             output.get("revised_assessment")
             if isinstance(output, dict)
@@ -922,6 +927,32 @@ class AssessmentPipeline(BaseAgent):
                 )
                 output["revised_assessment"] = revised
             ctx.session.state["deep_research_output"] = output
+
+
+def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return DeepResearchStructured.model_validate(raw).model_dump(
+            mode="json"
+        )
+    if not isinstance(raw, str) or not raw.strip():
+        raise RuntimeError("deep research agent produced no final text")
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, count=1)
+        text = re.sub(r"\s*```$", "", text, count=1)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise RuntimeError("deep research agent did not return a JSON object")
+    try:
+        parsed = json.loads(text[start : end + 1])
+        return DeepResearchStructured.model_validate(parsed).model_dump(
+            mode="json"
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(
+            f"deep research structured output was invalid: {exc}"
+        ) from exc
 
 
 async def _inject_user_and_drain(
@@ -977,6 +1008,8 @@ def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) ->
         f"NAME: {control_def.get('name')}\n"
         f"DOMAIN: {control_def.get('domain')}\n"
         f"SERVICE_SCOPED: {control_def.get('service_scoped', False)}\n"
+        f"EVIDENCE_SEEDS: "
+        f"{json.dumps(cfg.evidence_seeds.get(str(control_def.get('id')), []))}\n"
         f"DESCRIPTION:\n{control_def.get('description','')}\n"
     )
 

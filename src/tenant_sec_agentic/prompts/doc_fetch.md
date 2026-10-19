@@ -16,14 +16,16 @@ STRICT TOOL BUDGET:
   response. Do not call another tool, even if coverage is incomplete.
 
 INSTRUCTIONS:
-1. Search the provider's documentation site for content related to this
+1. If EVIDENCE_SEEDS are present, fetch those official candidate sources
+   first. Treat them as leads, not conclusions; assess relevance from content.
+2. Search the provider's documentation site for content related to this
    control. Prefer the docs base URL domain in your queries.
-2. Focus on TECHNICAL documentation: API references, configuration guides,
+3. Focus on TECHNICAL documentation: API references, configuration guides,
    architecture documents, CLI references. NOT marketing pages or press releases.
-3. For service-scoped controls, cover all in-scope services in the combined
+4. For service-scoped controls, cover all in-scope services in the combined
    queries when relevant.
-4. Fetch the full content of the most relevant pages (up to 3 pages).
-5. If you find no relevant documentation after 2 different searches, set
+5. Fetch the full content of the most relevant pages (up to 3 pages).
+6. If you find no relevant documentation after 2 different searches, set
    doc_quality to "absent".
 
 Populate docs_fetched with only url, title, and relevance. The tool runtime

@@ -33,6 +33,7 @@ from tenant_sec_agentic.pipeline import (
     _mock_assessor,
     _normalize_fetched_documents,
     _normalize_service_evidence,
+    _parse_deep_research_output,
     _reconcile_skeptic,
     _retrieval_outcome,
     current_assessment_input_hashes,
@@ -146,12 +147,16 @@ def _config(tmp_path: Path) -> AssessmentConfig:
 
 def test_example_uses_verified_vertex_baseline():
     config = load_assessment_config(ROOT / "assessment-config.example.yaml")
+    config.evidence_seeds = {
+        "iam.permission-boundaries": ["https://example.com/iam"]
+    }
     assert config.model_for("doc_fetch").endswith("gemini-2.5-flash")
     assert config.model_for("assessor").endswith("gemini-2.5-flash")
     assert config.model_for("consistency").endswith("gemini-2.5-flash")
     assert config.limits.max_parallel_assessments == 1
     assert config.vertex_traffic_class == "standard"
     restored = config_from_state(config_to_serializable(config))
+    assert restored.evidence_seeds == config.evidence_seeds
     assert restored.vertex_traffic_class == "standard"
     assert (
         restored.limits.model_timeout_seconds
@@ -315,6 +320,25 @@ def test_explicit_retrieval_error_is_never_assessed():
         )
         == "failed"
     )
+
+
+def test_deep_research_json_is_parsed_without_adk_schema_tool():
+    parsed = _parse_deep_research_output(
+        """```json
+        {
+          "questions_investigated": [{
+            "question": "Does the grant constraint exist?",
+            "answer": "Evidence remains incomplete.",
+            "sources": ["https://example.com/iam"],
+            "confidence": "unresolved"
+          }],
+          "revised_assessment": null,
+          "unresolved": ["Confirm delegated grant behavior."]
+        }
+        ```"""
+    )
+    assert parsed["questions_investigated"][0]["confidence"] == "unresolved"
+    assert parsed["revised_assessment"] is None
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():

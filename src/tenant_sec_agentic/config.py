@@ -63,6 +63,7 @@ class AssessmentConfig:
     paths: PathsConfig
     session: SessionConfig
     pricing: dict[str, dict[str, float]] = field(default_factory=dict)
+    evidence_seeds: dict[str, list[str]] = field(default_factory=dict)
     vertex_traffic_class: str = "standard"
     mock_mode: bool = False
 
@@ -185,6 +186,20 @@ def load_assessment_config(path: Path) -> AssessmentConfig:
         raise ValueError(
             "vertex_traffic_class must be standard, priority, or flex"
         )
+    evidence_seeds: dict[str, list[str]] = {}
+    for control_id, values in (
+        raw.get("evidence_seeds") or {}
+    ).items():
+        if not isinstance(values, list) or not values:
+            raise ValueError(
+                f"evidence_seeds.{control_id} must be a non-empty URL list"
+            )
+        urls = [str(value) for value in values]
+        if any(not url.startswith("https://") for url in urls):
+            raise ValueError(
+                f"evidence_seeds.{control_id} must contain HTTPS URLs"
+            )
+        evidence_seeds[str(control_id)] = urls
 
     return AssessmentConfig(
         provider=provider,
@@ -200,6 +215,7 @@ def load_assessment_config(path: Path) -> AssessmentConfig:
             }
             for model, price in (raw.get("pricing") or {}).items()
         },
+        evidence_seeds=evidence_seeds,
         vertex_traffic_class=traffic_class,
         mock_mode=bool(raw.get("mock_mode", False)),
     )
@@ -230,6 +246,7 @@ def config_to_serializable(cfg: AssessmentConfig) -> dict[str, Any]:
             "resume_artifacts": cfg.session.resume_artifacts,
         },
         "pricing": cfg.pricing,
+        "evidence_seeds": cfg.evidence_seeds,
         "vertex_traffic_class": cfg.vertex_traffic_class,
         "mock_mode": cfg.mock_mode,
     }
@@ -265,6 +282,12 @@ def config_from_state(data: dict[str, Any]) -> AssessmentConfig:
         pricing={
             str(model): dict(price)
             for model, price in (data.get("pricing") or {}).items()
+        },
+        evidence_seeds={
+            str(control_id): [str(url) for url in urls]
+            for control_id, urls in (
+                data.get("evidence_seeds") or {}
+            ).items()
         },
         vertex_traffic_class=str(
             data.get("vertex_traffic_class", "standard")

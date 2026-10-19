@@ -31,6 +31,11 @@ provider:
 controls:
   scope: all
 
+evidence_seeds:
+  iam.permission-boundaries:
+    - https://docs.cloud.google.com/iam/docs/setting-limits-on-granting-roles
+    - https://cloud.google.com/iam/docs/conditions-attribute-reference
+
 models:
   doc_fetch: vertex_ai/gemini-2.5-flash
   assessor: vertex_ai/gemini-2.5-flash
