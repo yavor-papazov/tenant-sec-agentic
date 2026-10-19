@@ -786,6 +786,52 @@ def test_batch_runner_recognizes_current_review_artifact(tmp_path):
     assert artifact_is_current(config, "enc.cmk") is False
 
 
+def test_batch_network_preflight_fails_before_reservation(monkeypatch):
+    def fail_dns(*_args, **_kwargs):
+        raise OSError("host unavailable")
+
+    monkeypatch.setattr(batch_cli.socket, "getaddrinfo", fail_dns)
+    with pytest.raises(
+        batch_cli.InfrastructureFailure,
+        match="oauth2.googleapis.com",
+    ):
+        batch_cli._assert_network_ready()
+
+
+def test_batch_adc_preflight_fails_before_reservation(monkeypatch):
+    class ExpiredCredentials:
+        def refresh(self, _request):
+            raise RuntimeError("reauthentication needed")
+
+    monkeypatch.setattr(
+        batch_cli.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        batch_cli.google.auth,
+        "default",
+        lambda **_kwargs: (ExpiredCredentials(), "project"),
+    )
+    with pytest.raises(
+        batch_cli.InfrastructureFailure,
+        match="ADC preflight failed",
+    ):
+        batch_cli._assert_network_ready()
+
+
+def test_batch_classifies_infrastructure_failure_log(tmp_path):
+    log_path = tmp_path / "attempt.log"
+    log_path.write_text(
+        "google.auth TransportError: NameResolutionError",
+        encoding="utf-8",
+    )
+    assert (
+        batch_cli._infrastructure_failure(log_path)
+        == "DNS resolution failed"
+    )
+
+
 def test_model_preflight_validates_structured_response(tmp_path, monkeypatch):
     config = _config(tmp_path)
     config.mock_mode = False

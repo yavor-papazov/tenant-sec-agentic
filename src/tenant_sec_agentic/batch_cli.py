@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import os
+import socket
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+import google.auth
+from google.auth.transport.requests import Request
 import yaml
 
 from tenant_sec_agentic.artifacts import validate_release_ready_assessment
@@ -28,6 +31,50 @@ from tenant_sec_agentic.pipeline import (
 from tenant_sec_agentic.repo import load_all_controls, resolve_control_scope
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class InfrastructureFailure(RuntimeError):
+    """External runtime failure that should abort the whole batch."""
+
+
+def _assert_network_ready() -> None:
+    for host in ("oauth2.googleapis.com", "api.tavily.com"):
+        try:
+            socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise InfrastructureFailure(
+                f"DNS/network preflight failed for {host}: {exc}"
+            ) from exc
+    try:
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(Request())
+    except Exception as exc:
+        raise InfrastructureFailure(
+            f"ADC preflight failed: {exc}"
+        ) from exc
+
+
+def _infrastructure_failure(log_path: Path) -> str | None:
+    try:
+        log_text = log_path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+    markers = {
+        "Failed to resolve": "DNS resolution failed",
+        "NameResolutionError": "DNS resolution failed",
+        "DefaultCredentialsError": "application credentials unavailable",
+        "Reauthentication is needed": "application credentials expired",
+        "invalid_grant": "application credentials rejected",
+    }
+    for marker, reason in markers.items():
+        if marker in log_text:
+            return reason
+    return None
 
 
 class BudgetTracker:
@@ -224,6 +271,7 @@ async def _run_control(
     tracker: BudgetTracker,
     timeout_seconds: float,
 ) -> bool | None:
+    _assert_network_ready()
     reservation = (
         cfg.limits.max_projected_cost_usd
         + cfg.limits.max_search_calls_per_run * 0.008
@@ -314,12 +362,20 @@ async def _run_control(
         artifact_current=current,
         log_path=log_path,
     )
+    infrastructure_error = (
+        None if current else _infrastructure_failure(log_path)
+    )
     print(
         f"[{cfg.provider.slug}] {control_id}: "
         f"{'ready for review' if current else 'failed'}; "
         f"cumulative charge ${tracker.charged_usd:.2f}",
         flush=True,
     )
+    if infrastructure_error:
+        raise InfrastructureFailure(
+            f"{cfg.provider.slug}/{control_id}: "
+            f"{infrastructure_error}; see {log_path}"
+        )
     return current
 
 
@@ -372,23 +428,32 @@ async def _run_provider(
         scope = resolve_control_scope(selected_controls, controls)
     completed: list[str] = []
     failed: list[str] = []
+    infrastructure_errors: list[str] = []
     control_semaphore = asyncio.Semaphore(control_parallelism)
+    abort_event = asyncio.Event()
 
     async def assess(control_id: str) -> tuple[str, bool]:
         if artifact_is_current(cfg, control_id):
             return control_id, True
         async with control_semaphore:
+            if abort_event.is_set():
+                return control_id, False
             ready: bool | None = False
             for attempt in range(1, max_attempts + 1):
-                async with assessment_semaphore:
-                    ready = await _run_control(
-                        config_path,
-                        cfg,
-                        control_id,
-                        attempt,
-                        tracker,
-                        timeout_seconds,
-                    )
+                try:
+                    async with assessment_semaphore:
+                        ready = await _run_control(
+                            config_path,
+                            cfg,
+                            control_id,
+                            attempt,
+                            tracker,
+                            timeout_seconds,
+                        )
+                except InfrastructureFailure as exc:
+                    infrastructure_errors.append(str(exc))
+                    abort_event.set()
+                    return control_id, False
                 if ready is True or ready is None:
                     break
             return control_id, ready is True
@@ -399,7 +464,11 @@ async def _run_provider(
         )
     for control_id, ready in outcomes:
         (completed if ready else failed).append(control_id)
-    return {"completed": completed, "failed": failed}
+    return {
+        "completed": completed,
+        "failed": failed,
+        "infrastructure_errors": infrastructure_errors,
+    }
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -479,6 +548,11 @@ async def _run(args: argparse.Namespace) -> int:
         for result in results
         for control in result["failed"]
     ]
+    infrastructure_errors = [
+        error
+        for result in results
+        for error in result["infrastructure_errors"]
+    ]
     summary = {
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "model_preflight": model_preflight,
@@ -488,10 +562,13 @@ async def _run(args: argparse.Namespace) -> int:
         ),
         "failed": failed,
     }
+    if infrastructure_errors:
+        summary["status"] = "infrastructure_failed"
+        summary["infrastructure_errors"] = infrastructure_errors
     tracker.data["summary"] = summary
     tracker._write()
     print(json.dumps(summary, indent=2), flush=True)
-    return 1 if failed else 0
+    return 2 if infrastructure_errors else (1 if failed else 0)
 
 
 def main(argv: list[str] | None = None) -> None:
