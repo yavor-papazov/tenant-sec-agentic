@@ -1492,6 +1492,8 @@ def test_batch_budget_reservations_fail_closed(tmp_path):
 
     asyncio.run(exercise())
     assert tracker.charged_usd == pytest.approx(5.0)
+    assert tracker.measured_model_usd == pytest.approx(4.9)
+    assert tracker.tavily_max_usd == pytest.approx(0.1)
 
 
 def test_batch_budget_keeps_unmetered_model_charge(tmp_path):
@@ -1523,6 +1525,8 @@ def test_batch_budget_keeps_unmetered_model_charge(tmp_path):
     run = tracker.data["runs"][0]
     assert run["actual_model_cost_usd"] == pytest.approx(0.1)
     assert run["model_charge_usd"] == pytest.approx(1.25)
+    assert tracker.measured_model_usd == pytest.approx(0.1)
+    assert tracker.tavily_max_usd == pytest.approx(0.02)
 
 
 def test_batch_process_watchdog_kills_hung_child():

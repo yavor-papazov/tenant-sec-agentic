@@ -105,8 +105,23 @@ class BudgetTracker:
 
     @property
     def charged_usd(self) -> float:
+        """Conservative charge used for budget enforcement."""
         return sum(
             float(run.get("charged_cost_usd", 0.0))
+            for run in self.data["runs"]
+        )
+
+    @property
+    def measured_model_usd(self) -> float:
+        return sum(
+            float(run.get("actual_model_cost_usd") or 0.0)
+            for run in self.data["runs"]
+        )
+
+    @property
+    def tavily_max_usd(self) -> float:
+        return sum(
+            float(run.get("tavily_max_cost_usd") or 0.0)
             for run in self.data["runs"]
         )
 
@@ -190,6 +205,13 @@ class BudgetTracker:
                 }
             )
             self.data["charged_total_usd"] = self.charged_usd
+            self.data[
+                "measured_model_total_usd"
+            ] = self.measured_model_usd
+            self.data["tavily_max_total_usd"] = self.tavily_max_usd
+            self.data[
+                "conservative_charge_total_usd"
+            ] = self.charged_usd
             self._write()
             self.active_run_ids.discard(run_id)
             self.condition.notify_all()
@@ -303,7 +325,8 @@ async def _run_control(
     launched_at = datetime.now(timezone.utc)
     print(
         f"[{cfg.provider.slug}] {control_id} attempt {attempt} "
-        f"(charged ${tracker.charged_usd:.2f}/${tracker.ceiling_usd:.2f})",
+        f"(reserved budget ${tracker.charged_usd:.2f}/"
+        f"${tracker.ceiling_usd:.2f})",
         flush=True,
     )
     exit_code = 125
@@ -373,7 +396,9 @@ async def _run_control(
     print(
         f"[{cfg.provider.slug}] {control_id}: "
         f"{'ready for review' if current else 'failed'}; "
-        f"cumulative charge ${tracker.charged_usd:.2f}",
+        f"measured model cost ${tracker.measured_model_usd:.2f}; "
+        f"Tavily ceiling ${tracker.tavily_max_usd:.2f}; "
+        f"conservative budget charge ${tracker.charged_usd:.2f}",
         flush=True,
     )
     if infrastructure_error:
@@ -518,6 +543,9 @@ async def _run(args: argparse.Namespace) -> int:
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "model_preflight": model_preflight,
             "charged_total_usd": tracker.charged_usd,
+            "measured_model_total_usd": tracker.measured_model_usd,
+            "tavily_max_total_usd": tracker.tavily_max_usd,
+            "conservative_charge_total_usd": tracker.charged_usd,
             "ready_for_review": 0,
             "failed": [],
             "status": "preflight_failed",
@@ -563,6 +591,9 @@ async def _run(args: argparse.Namespace) -> int:
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "model_preflight": model_preflight,
         "charged_total_usd": tracker.charged_usd,
+        "measured_model_total_usd": tracker.measured_model_usd,
+        "tavily_max_total_usd": tracker.tavily_max_usd,
+        "conservative_charge_total_usd": tracker.charged_usd,
         "ready_for_review": sum(
             len(result["completed"]) for result in results
         ),
