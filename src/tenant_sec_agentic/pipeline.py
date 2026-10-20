@@ -357,8 +357,7 @@ class AssessmentPipeline(BaseAgent):
                             assessor_out = st.get("assessor_output") or {}
 
                     skip_skeptic = (
-                        checkpoint_deep is not None
-                        or checkpoint_skeptic is not None
+                        checkpoint_skeptic is not None
                         or retrieval_outcome in {"failed", "exhausted"}
                         or (
                             assessor_out.get("status") != "assessed"
@@ -372,8 +371,7 @@ class AssessmentPipeline(BaseAgent):
                         skeptic_out = checkpoint_skeptic
 
                     skip_consistency = (
-                        checkpoint_deep is not None
-                        or checkpoint_consistency is not None
+                        checkpoint_consistency is not None
                         or not peer_profiles
                         or retrieval_outcome in {"failed", "exhausted"}
                     )
@@ -1794,13 +1792,10 @@ def _load_stage_checkpoint(
             deep = stored_deep
     if (
         deep is None
-        and all(
-            hashes.get(stage)
-            and saved_hashes.get(stage) == hashes.get(stage)
-            for stage in ("skeptic", "consistency", "deep_research")
-        )
+        and hashes.get("deep_research")
+        and saved_hashes.get("deep_research")
+        == hashes.get("deep_research")
         and peer_context_current
-        and skeptic is not None
         and isinstance(stored_deep, dict)
     ):
         findings_payload = {

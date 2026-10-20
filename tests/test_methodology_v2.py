@@ -969,13 +969,14 @@ def test_failed_artifact_reuses_research_before_revision(tmp_path):
         {
             "doc_fetch": "docs",
             "assessor": "assessor",
-            "skeptic": "skeptic",
+            "skeptic": "new-skeptic",
             "consistency": "consistency",
             "deep_research": "research",
             "research_revision": "new-revision",
         },
     )
     assert checkpoint is not None
+    assert checkpoint[2] is None
     assert checkpoint[4]["_needs_revision"] is True
     assert checkpoint[4]["questions_investigated"][0]["answer"] == "Yes."
     assert checkpoint[4]["_pending_challenge"]["verdict"] == (
