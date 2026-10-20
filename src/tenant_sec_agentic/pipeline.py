@@ -49,6 +49,7 @@ from tenant_sec_agentic.schemas import (
     ConsistencyStructured,
     DeepResearchStructured,
     DocFetchStructured,
+    ResearchFindingsStructured,
     SkepticStructured,
 )
 from tenant_sec_agentic.web_tools import (
@@ -85,6 +86,7 @@ def prompt_hashes() -> dict[str, str]:
         "skeptic": _prompt_hash("skeptic.md"),
         "consistency": _prompt_hash("consistency.md"),
         "deep_research": _prompt_hash("deep_research.md"),
+        "research_revision": _prompt_hash("research_revision.md"),
     }
 
 
@@ -261,6 +263,7 @@ class AssessmentPipeline(BaseAgent):
                 "consistency_output",
                 "deep_research_output",
                 "deep_research_raw",
+                "deep_research_revision_output",
             ):
                 st.pop(k, None)
 
@@ -916,7 +919,7 @@ class AssessmentPipeline(BaseAgent):
             f"CONSISTENCY FLAGS:\n```json\n"
             f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```\n"
             "OUTPUT JSON SCHEMA:\n```json\n"
-            f"{json.dumps(DeepResearchStructured.model_json_schema(), default=str)}```"
+            f"{json.dumps(ResearchFindingsStructured.model_json_schema(), default=str)}```"
         )
         await _inject_user_and_drain(
             agent,
@@ -926,10 +929,7 @@ class AssessmentPipeline(BaseAgent):
             "deep_research",
         )
         raw_output = ctx.session.state.get("deep_research_raw")
-        output = _parse_deep_research_output(
-            raw_output,
-            ctx.session.state.get("assessor_output"),
-        )
+        output = _parse_research_findings_output(raw_output)
         if not isinstance(output, dict):
             raise RuntimeError(
                 "deep research agent produced no structured output"
@@ -939,22 +939,73 @@ class AssessmentPipeline(BaseAgent):
             ctx.session.state.get("skeptic_output") or {},
         )
         _fetch_missing_deep_sources(ctx, output)
-        ctx.session.state["deep_research_output"] = output
-        revised = (
-            output.get("revised_assessment")
-            if isinstance(output, dict)
-            else None
+        revised = await self._run_research_revision(
+            ctx,
+            cfg,
+            control_def,
+            output,
         )
-        if isinstance(revised, dict) and revised.get("status"):
-            if revised.get("status") == "assessed":
-                fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-                revised = _enrich_claim_bundle(
-                    revised,
-                    cfg,
-                    fetched,
-                )
-                output["revised_assessment"] = revised
-            ctx.session.state["deep_research_output"] = output
+        output["revised_assessment"] = revised
+        ctx.session.state["deep_research_output"] = output
+
+    async def _run_research_revision(
+        self,
+        ctx: InvocationContext,
+        cfg: AssessmentConfig,
+        control_def: dict[str, Any],
+        findings: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompt = _load_prompt("research_revision.md")
+        model = _metered_model(ctx, cfg, "research_revision")
+        agent = LlmAgent(
+            name="research_revision_agent",
+            model=model,
+            instruction=prompt,
+            output_schema=AssessorStructured,
+            output_key="deep_research_revision_output",
+            include_contents="default",
+            generate_content_config=types.GenerateContentConfig(
+                max_output_tokens=cfg.limits.max_output_tokens_per_call
+            ),
+        )
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+        documents = [
+            {
+                "url": url,
+                "title": value.get("title"),
+                "content": value.get("content"),
+            }
+            for url, value in fetched.items()
+            if isinstance(value, dict) and value.get("content")
+        ]
+        user_text = (
+            f"CONTROL YAML:\n```yaml\n"
+            f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"{_service_scope_contract(cfg, control_def)}\n"
+            "ORIGINAL ASSESSMENT:\n"
+            f"```json\n{json.dumps(ctx.session.state.get('assessor_output') or {}, default=str)}```\n"
+            "RESEARCH FINDINGS:\n"
+            f"```json\n{json.dumps(findings, default=str)}```\n"
+            "FETCHED DOCUMENTATION:\n"
+            f"```json\n{json.dumps(documents, default=str)}```"
+        )
+        await _inject_user_and_drain(
+            agent,
+            ctx,
+            user_text,
+            cfg,
+            "research_revision",
+        )
+        revised = ctx.session.state.get("deep_research_revision_output")
+        if not isinstance(revised, dict) or not revised.get("status"):
+            raise RuntimeError(
+                "research revision agent produced no structured output"
+            )
+        _normalize_service_array(revised)
+        if revised.get("status") == "assessed":
+            revised = _enrich_claim_bundle(revised, cfg, fetched)
+        ctx.session.state["deep_research_revision_output"] = revised
+        return revised
 
 
 def _service_scope_contract(
@@ -1079,6 +1130,45 @@ def _validate_deep_question_coverage(
         raise RuntimeError(
             "deep research omitted skeptic questions: " + " | ".join(missing)
         )
+
+
+def _parse_research_findings_output(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        parsed = raw
+    else:
+        if not isinstance(raw, str) or not raw.strip():
+            raise RuntimeError("deep research agent produced no final text")
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, count=1)
+            text = re.sub(r"\s*```$", "", text, count=1)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise RuntimeError(
+                "deep research agent did not return a JSON object"
+            )
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            try:
+                parsed = repair_json(
+                    text[start : end + 1],
+                    return_objects=True,
+                )
+            except Exception as repair_exc:
+                raise RuntimeError(
+                    "deep research findings were invalid: "
+                    f"{exc}; repair failed: {repair_exc}"
+                ) from repair_exc
+    try:
+        return ResearchFindingsStructured.model_validate(parsed).model_dump(
+            mode="json"
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            f"deep research findings were invalid: {exc}"
+        ) from exc
 
 
 def _parse_deep_research_output(
@@ -1396,7 +1486,12 @@ def _load_stage_checkpoint(
         all(
             hashes.get(stage)
             and saved_hashes.get(stage) == hashes.get(stage)
-            for stage in ("skeptic", "consistency", "deep_research")
+            for stage in (
+                "skeptic",
+                "consistency",
+                "deep_research",
+                "research_revision",
+            )
         )
         and peer_context_current
         and isinstance(stored_deep, dict)

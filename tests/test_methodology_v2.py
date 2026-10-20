@@ -37,6 +37,7 @@ from tenant_sec_agentic.pipeline import (
     _normalize_service_array,
     _normalize_service_evidence,
     _parse_deep_research_output,
+    _parse_research_findings_output,
     _reconcile_skeptic,
     _retrieval_outcome,
     _service_scope_contract,
@@ -159,6 +160,9 @@ def test_example_uses_verified_vertex_baseline():
     assert config.model_for("doc_fetch").endswith("gemini-2.5-flash")
     assert config.model_for("assessor").endswith("gemini-2.5-flash")
     assert config.model_for("consistency").endswith("gemini-2.5-flash")
+    assert config.model_for("research_revision").endswith(
+        "gemini-2.5-flash"
+    )
     assert config.limits.max_parallel_assessments == 1
     assert config.vertex_traffic_class == "standard"
     restored = config_from_state(config_to_serializable(config))
@@ -356,6 +360,21 @@ def test_deep_research_json_is_parsed_without_adk_schema_tool():
     )
     assert parsed["questions_investigated"][0]["confidence"] == "unresolved"
     assert parsed["revised_assessment"]["status"] == "unknown"
+
+
+def test_research_findings_parse_without_assessment_payload():
+    parsed = _parse_research_findings_output(
+        """{
+          "questions_investigated": [{
+            "question": "Does Secret Manager support CMEK?",
+            "answer": "Yes.",
+            "sources": ["https://example.com/secret-manager"],
+            "confidence": "high"
+          }],
+          "unresolved": []
+        }"""
+    )
+    assert set(parsed) == {"questions_investigated", "unresolved"}
 
 
 def test_deep_research_must_answer_every_skeptic_question():

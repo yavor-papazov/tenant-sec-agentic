@@ -490,6 +490,7 @@ async def _run(args: argparse.Namespace) -> int:
                                 "skeptic",
                                 "consistency",
                                 "deep_research",
+                                "research_revision",
                             )
                         }
                     )

@@ -74,6 +74,7 @@ class AssessmentConfig:
             "assessor": "vertex_ai/gemini-2.5-flash",
             "skeptic": "vertex_ai/gemini-2.5-flash",
             "deep_research": "vertex_ai/gemini-2.5-flash",
+            "research_revision": "vertex_ai/gemini-2.5-flash",
         }
         return self.models.get(role, defaults.get(role, defaults["assessor"]))
 

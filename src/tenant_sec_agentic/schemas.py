@@ -220,6 +220,11 @@ class QuestionFinding(BaseModel):
         return self
 
 
+class ResearchFindingsStructured(BaseModel):
+    questions_investigated: list[QuestionFinding] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+
+
 class DeepResearchStructured(BaseModel):
     questions_investigated: list[QuestionFinding] = Field(default_factory=list)
     revised_assessment: AssessorStructured

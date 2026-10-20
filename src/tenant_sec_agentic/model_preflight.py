@@ -72,6 +72,7 @@ def preflight_model_routes(
         "skeptic",
         "consistency",
         "deep_research",
+        "research_revision",
     )
     models = sorted(
         {cfg.model_for(role).removeprefix("vertex_ai/") for role in roles}

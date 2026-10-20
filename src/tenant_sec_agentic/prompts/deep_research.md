@@ -12,22 +12,13 @@ evidence item. Never cite a URL that you only saw in search results. Prefer
 first-party technical documentation; do not replace available first-party
 evidence with a blog post.
 
-Return JSON matching deep research schema: questions_investigated,
-revised_assessment, unresolved. `revised_assessment` is mandatory: return a
-complete replacement assessment that incorporates the research, even when the
-original recommendation remains unchanged.
+Return JSON matching the research-findings schema: questions_investigated and
+unresolved.
 The user message includes the exact JSON schema. Return only one JSON object,
 without Markdown fences or commentary.
-Missing or inconclusive evidence remains `unknown`; it is never converted to
-L0. A revised assessed result must retain the exact supporting URLs in
-`sources_used` and in each assessed service. It must also return a complete
-methodology 2.0 claim chain: evidence_items with verbatim quotes, atomic
-claims, and exactly one criteria_result for each level 0-3. Preserve valid
-items from the original assessment and add the new decisive evidence. Every
-met criterion must cite a supported claim, and the numeric score must be the
-highest met criterion. Keep commercial availability in the separate
-`licensing` observation; it must not affect the maturity score.
-Keep each evidence-item quote at or below 1,200 characters.
+Missing or inconclusive evidence remains unresolved; it is never evidence of
+L0. Report only sourced findings here. A separate constrained revision stage
+will apply them to the assessment and preserve the claim chain.
 Absence from a compatibility list is not positive evidence of unavailability
 and cannot support L0 by itself. Use `not_applicable` for a service to which
 the control does not logically apply; do not score that service L0 merely
