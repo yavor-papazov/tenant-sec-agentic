@@ -338,8 +338,13 @@ async def _run_control(
     current = artifact_is_current(cfg, control_id)
     usage = _fresh_usage(cfg, control_id, launched_at)
     totals = usage.get("totals", {}) if usage else {}
+    successful_without_usage = (
+        usage is None and current and exit_code == 0
+    )
     model_cost = (
-        float(totals.get("actual_cost_usd", 0.0)) if usage else None
+        float(totals.get("actual_cost_usd", 0.0))
+        if usage
+        else (0.0 if successful_without_usage else None)
     )
     model_charge = model_cost
     if usage and int(totals.get("unmetered_model_calls", 0)) > 0:
@@ -350,7 +355,7 @@ async def _run_control(
     tavily_cost = (
         float(totals.get("tavily_projected_cost_usd", 0.0))
         if usage
-        else None
+        else (0.0 if successful_without_usage else None)
     )
     await tracker.finalize(
         run_id,
