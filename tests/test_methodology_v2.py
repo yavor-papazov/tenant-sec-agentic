@@ -446,6 +446,20 @@ def test_deep_research_truncates_oversized_verbatim_quote():
         == 1200
     )
     assert "source-backed claim chain" in parsed["revised_assessment"]["evidence"]
+    replacement = dict(parsed["revised_assessment"])
+    replacement["services"] = []
+    for key in ("evidence_items", "claims", "criteria_results"):
+        replacement.pop(key)
+    reused = _parse_deep_research_output(
+        {
+            "questions_investigated": [],
+            "revised_assessment": replacement,
+            "unresolved": [],
+        },
+        parsed["revised_assessment"],
+    )
+    assert reused["revised_assessment"]["claims"]
+    assert reused["revised_assessment"]["criteria_results"]
 
 
 def test_service_scoped_release_requires_complete_mixed_result():

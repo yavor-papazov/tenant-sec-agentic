@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import hashlib
 import json
 import logging
@@ -925,7 +926,10 @@ class AssessmentPipeline(BaseAgent):
             "deep_research",
         )
         raw_output = ctx.session.state.get("deep_research_raw")
-        output = _parse_deep_research_output(raw_output)
+        output = _parse_deep_research_output(
+            raw_output,
+            ctx.session.state.get("assessor_output"),
+        )
         if not isinstance(output, dict):
             raise RuntimeError(
                 "deep research agent produced no structured output"
@@ -1077,7 +1081,10 @@ def _validate_deep_question_coverage(
         )
 
 
-def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
+def _parse_deep_research_output(
+    raw: Any,
+    base_assessment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if isinstance(raw, dict):
         parsed = raw
     else:
@@ -1122,6 +1129,19 @@ def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
                     "See the per-service findings and source-backed claim "
                     "chain for the assessment rationale."
                 )
+            if (
+                isinstance(base_assessment, dict)
+                and _assessment_verdicts_match(revised, base_assessment)
+            ):
+                for key in (
+                    "evidence_items",
+                    "claims",
+                    "criteria_results",
+                    "sources_used",
+                    "licensing",
+                ):
+                    if not revised.get(key) and base_assessment.get(key):
+                        revised[key] = deepcopy(base_assessment[key])
             for item in revised.get("evidence_items") or []:
                 if not isinstance(item, dict):
                     continue
@@ -1140,6 +1160,42 @@ def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
         raise RuntimeError(
             f"deep research structured output was invalid: {exc}"
         ) from exc
+
+
+def _assessment_verdicts_match(
+    candidate: dict[str, Any],
+    base: dict[str, Any],
+) -> bool:
+    if (
+        candidate.get("status") != base.get("status")
+        or candidate.get("score") != base.get("score")
+    ):
+        return False
+
+    def verdicts(services: Any) -> dict[str, tuple[Any, Any]]:
+        if isinstance(services, dict):
+            return {
+                str(service_id): (
+                    value.get("status"),
+                    value.get("score"),
+                )
+                for service_id, value in services.items()
+                if isinstance(value, dict)
+            }
+        if isinstance(services, list):
+            return {
+                str(value.get("service_id")): (
+                    value.get("status"),
+                    value.get("score"),
+                )
+                for value in services
+                if isinstance(value, dict) and value.get("service_id")
+            }
+        return {}
+
+    return verdicts(candidate.get("services")) == verdicts(
+        base.get("services")
+    )
 
 
 async def _inject_user_and_drain(
