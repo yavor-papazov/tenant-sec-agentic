@@ -1843,6 +1843,11 @@ def _load_stage_checkpoint(
         pending_challenge is not None
         and isinstance(stored_deep, dict)
         and isinstance(stored_deep.get("revision_challenge"), dict)
+        and (
+            stored_deep.get("human_adjudication_required") is True
+            or "human adjudication is required"
+            in str(artifact.get("error_detail") or "")
+        )
     )
     if (
         (pending_challenge is None or terminal_adjudication)
