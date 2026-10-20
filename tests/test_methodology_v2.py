@@ -1024,6 +1024,48 @@ def test_failed_assessor_reuses_fetched_documents(tmp_path):
     assert "not contiguous" in error
 
 
+def test_infrastructure_failure_reuses_fetched_documents(tmp_path):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    artifact = {
+        "status": "error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {
+            "doc_fetch": "docs",
+            "assessor": "assessor",
+        },
+        "doc_fetch": {
+            "retrieval_outcome": "succeeded",
+            "docs_fetched": [
+                {
+                    "url": "https://example.com/docs",
+                    "content": "Fetched before the model quota error.",
+                }
+            ],
+            "doc_quality": "adequate",
+        },
+        "error_detail": "429 RESOURCE_EXHAUSTED",
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_failed_assessor_checkpoint(
+        config,
+        "enc.cmk",
+        {"doc_fetch": "docs", "assessor": "assessor"},
+    )
+    assert checkpoint is not None
+    docs, previous, error = checkpoint
+    assert docs["docs_fetched"][0]["content"] == (
+        "Fetched before the model quota error."
+    )
+    assert previous is None
+    assert error == "429 RESOURCE_EXHAUSTED"
+
+
 def test_failed_artifact_reuses_research_before_revision(tmp_path):
     config = _config(tmp_path)
     config.session.resume_artifacts = True

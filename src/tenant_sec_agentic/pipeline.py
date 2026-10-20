@@ -369,9 +369,14 @@ class AssessmentPipeline(BaseAgent):
                                 st[
                                     "assessor_rejected_output"
                                 ] = rejected_assessor
-                            st[
-                                "assessor_rejected_error"
-                            ] = rejected_error
+                            if (
+                                rejected_assessor is not None
+                                or "evidence validation failed"
+                                in rejected_error
+                            ):
+                                st[
+                                    "assessor_rejected_error"
+                                ] = rejected_error
                             logger.info(
                                 "resuming %s from fetched documents "
                                 "after rejected assessor evidence",
@@ -1881,7 +1886,7 @@ def _load_failed_assessor_checkpoint(
     hashes: dict[str, str],
     input_hashes: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, str] | None:
-    """Recover fetched documents after assessor evidence was rejected."""
+    """Recover fetched documents after an assessor-stage failure."""
     if not cfg.session.resume_artifacts:
         return None
     path = (
@@ -1905,7 +1910,6 @@ def _load_failed_assessor_checkpoint(
         or artifact.get("status") not in {"error", "validation_error"}
         or artifact.get("assessment_id")
         != cfg.provider.assessment_id
-        or "evidence validation failed" not in error_detail
     ):
         return None
     saved_hashes = artifact.get("prompt_hashes") or {}
