@@ -17,6 +17,9 @@ RULES:
 3. Missing or insufficient authoritative documentation is `unknown`, never L0.
    L0 requires affirmative official evidence that the capability is unavailable,
    a reproducible interface/live test, or provider confirmation.
+   Absence from a compatibility list is not affirmative unavailability.
+   Use `not_applicable`, not L0, when the control does not logically apply to
+   a service.
    If the retrieval stage itself failed or fetched no documents, return
    `not_assessed`, not `unknown`.
 4. If service_scoped is true, assess each in-scope service. A mixed result may

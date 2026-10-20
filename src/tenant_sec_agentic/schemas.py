@@ -208,10 +208,16 @@ class ConsistencyStructured(BaseModel):
 
 
 class QuestionFinding(BaseModel):
-    question: str = ""
-    answer: str = ""
+    question: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
     sources: list[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low", "unresolved"] = "unresolved"
+
+    @model_validator(mode="after")
+    def resolved_findings_require_sources(self) -> "QuestionFinding":
+        if self.confidence != "unresolved" and not self.sources:
+            raise ValueError("resolved finding requires sources")
+        return self
 
 
 class DeepResearchStructured(BaseModel):

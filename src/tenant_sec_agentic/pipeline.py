@@ -930,6 +930,10 @@ class AssessmentPipeline(BaseAgent):
             raise RuntimeError(
                 "deep research agent produced no structured output"
             )
+        _validate_deep_question_coverage(
+            output,
+            ctx.session.state.get("skeptic_output") or {},
+        )
         _fetch_missing_deep_sources(ctx, output)
         ctx.session.state["deep_research_output"] = output
         revised = (
@@ -1048,6 +1052,29 @@ def _fetch_missing_deep_sources(
                 url,
                 result.get("error_detail"),
             )
+
+
+def _validate_deep_question_coverage(
+    output: dict[str, Any],
+    skeptic: dict[str, Any],
+) -> None:
+    expected = {
+        _normalize_text(str(question))
+        for question in skeptic.get("deep_research_questions") or []
+        if str(question).strip()
+    }
+    if not expected:
+        return
+    investigated = {
+        _normalize_text(str(finding.get("question") or ""))
+        for finding in output.get("questions_investigated") or []
+        if isinstance(finding, dict)
+    }
+    missing = sorted(expected - investigated)
+    if missing:
+        raise RuntimeError(
+            "deep research omitted skeptic questions: " + " | ".join(missing)
+        )
 
 
 def _parse_deep_research_output(raw: Any) -> dict[str, Any]:

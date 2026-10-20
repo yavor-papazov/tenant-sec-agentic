@@ -35,6 +35,10 @@ evidence_seeds:
   iam.permission-boundaries:
     - https://docs.cloud.google.com/iam/docs/setting-limits-on-granting-roles
     - https://cloud.google.com/iam/docs/conditions-attribute-reference
+  enc.cmk:
+    - https://docs.cloud.google.com/kms/docs/cmek
+    - https://docs.cloud.google.com/kms/docs/compatible-services
+    - https://docs.cloud.google.com/secret-manager/docs/cmek
 
 models:
   doc_fetch: vertex_ai/gemini-2.5-flash

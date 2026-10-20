@@ -39,6 +39,7 @@ from tenant_sec_agentic.pipeline import (
     _reconcile_skeptic,
     _retrieval_outcome,
     _service_scope_contract,
+    _validate_deep_question_coverage,
     _validate_service_scope_result,
     current_assessment_input_hashes,
     prompt_hashes,
@@ -349,6 +350,28 @@ def test_deep_research_json_is_parsed_without_adk_schema_tool():
     )
     assert parsed["questions_investigated"][0]["confidence"] == "unresolved"
     assert parsed["revised_assessment"] is None
+
+
+def test_deep_research_must_answer_every_skeptic_question():
+    question = "Does Secret Manager support CMEK?"
+    with pytest.raises(RuntimeError, match="omitted skeptic questions"):
+        _validate_deep_question_coverage(
+            {"questions_investigated": []},
+            {"deep_research_questions": [question]},
+        )
+    _validate_deep_question_coverage(
+        {
+            "questions_investigated": [
+                {
+                    "question": question,
+                    "answer": "Yes.",
+                    "sources": ["https://example.com/secret-manager"],
+                    "confidence": "high",
+                }
+            ]
+        },
+        {"deep_research_questions": [question]},
+    )
 
 
 def test_deep_research_json_repairs_minor_model_syntax_errors():
