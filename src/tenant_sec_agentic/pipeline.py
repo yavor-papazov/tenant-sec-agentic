@@ -1970,15 +1970,30 @@ def _enrich_claim_bundle(
                 f"{item.get('id') or '<missing id>'}"
             )
             continue
-        aligned_quote = _aligned_source_quote(content, quote)
-        if aligned_quote is None:
+        aligned_quote, coverage, required_terms_present = (
+            _source_quote_alignment(content, quote)
+        )
+        if (
+            aligned_quote is not None
+            and coverage >= 0.75
+            and required_terms_present
+        ):
+            quote = aligned_quote[:1200]
+        else:
+            closest = (
+                aligned_quote[:500]
+                if aligned_quote is not None
+                else "<no comparable source passage>"
+            )
+            if aligned_quote is None:
+                coverage = 0.0
             errors.append(
                 "evidence quote is not sufficiently supported by fetched "
-                "source: "
-                f"{item.get('id') or '<missing id>'} ({matched_url})"
+                f"source: {item.get('id') or '<missing id>'} "
+                f"({matched_url}); closest verbatim passage "
+                f"({coverage:.0%} term coverage): {closest}"
             )
             continue
-        quote = aligned_quote[:1200]
         item["title"] = str(
             item.get("title") or fetched.get("title") or url
         )
@@ -2072,12 +2087,15 @@ def _normalize_text(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
-def _aligned_source_quote(content: str, quote: str) -> str | None:
-    """Return a verbatim source passage only for a tightly aligned quote."""
+def _source_quote_alignment(
+    content: str,
+    quote: str,
+) -> tuple[str | None, float, bool]:
+    """Find the closest verbatim passage and report conservative alignment."""
     normalized_content = _normalize_text(content)
     normalized_quote = _normalize_text(quote)
     if normalized_quote in normalized_content:
-        return quote
+        return quote, 1.0, True
 
     stop_words = {
         "and",
@@ -2110,7 +2128,7 @@ def _aligned_source_quote(content: str, quote: str) -> str | None:
 
     quote_terms = terms(quote)
     if len(quote_terms) < 4:
-        return None
+        return None, 0.0, False
     required = {
         token
         for token in quote_terms
@@ -2147,15 +2165,17 @@ def _aligned_source_quote(content: str, quote: str) -> str | None:
 
     best: str | None = None
     best_coverage = 0.0
+    best_required_terms_present = False
     for candidate in candidates:
         candidate_terms = terms(candidate)
-        if not required.issubset(candidate_terms):
-            continue
         coverage = len(quote_terms & candidate_terms) / len(quote_terms)
         if coverage > best_coverage:
             best = candidate
             best_coverage = coverage
-    return best if best_coverage >= 0.75 else None
+            best_required_terms_present = required.issubset(
+                candidate_terms
+            )
+    return best, best_coverage, best_required_terms_present
 
 
 def _should_deep_research(
