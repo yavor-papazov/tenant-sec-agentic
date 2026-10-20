@@ -41,3 +41,12 @@ Rules:
 10. If an independent challenge is supplied, reconcile every disputed service
     against the fetched evidence. Do not accept the challenge blindly, but do
     not preserve the prior score when its stated limitation is source-backed.
+11. Treat research answers and prior assessments as hypotheses. The fetched
+    source text is authoritative. Discard any detail from a finding or
+    challenge that is not supported by that text, even when its URL is valid.
+    Every evidence-item quote must be copied verbatim from its cited fetched
+    document.
+12. A console-only configuration restriction is not a capability or regional
+    availability gap when a documented API, CLI, or other supported interface
+    provides the capability. Distinguish interface limitations from missing
+    service-region support and from material data that lacks protection.

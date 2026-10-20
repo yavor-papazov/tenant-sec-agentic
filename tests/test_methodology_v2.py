@@ -1053,6 +1053,32 @@ def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
     assert item["applicability"]["offering"] == "public"
 
 
+def test_claim_bundle_rejects_non_verbatim_evidence_quote(tmp_path):
+    config = _config(tmp_path)
+    assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Supported.",
+        **_claims(),
+    }
+    raw = assessor["evidence_items"][0]
+    raw["quote"] = "The source does not actually say this."
+
+    with pytest.raises(
+        RuntimeError,
+        match="evidence quote is not present in fetched source",
+    ):
+        _enrich_claim_bundle(
+            assessor,
+            config,
+            {
+                "https://example.com/docs/cmk": {
+                    "content": "API accepts a customer key identifier."
+                }
+            },
+        )
+
+
 def test_batch_runner_recognizes_current_review_artifact(tmp_path):
     config = _config(tmp_path)
     artifact_dir = config.paths.assessments_dir / config.provider.slug

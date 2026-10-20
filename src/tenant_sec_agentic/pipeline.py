@@ -1824,14 +1824,6 @@ def _enrich_claim_bundle(
 ) -> dict[str, Any]:
     """Attach immutable source metadata and source-backed quotes."""
     enriched = dict(assessor)
-    claims = list(enriched.get("claims") or [])
-    assertions_by_evidence: dict[str, list[str]] = {}
-    for claim in claims:
-        for evidence_id in claim.get("evidence_item_ids") or []:
-            assertions_by_evidence.setdefault(str(evidence_id), []).append(
-                str(claim.get("assertion") or "")
-            )
-
     now = datetime.now(timezone.utc).isoformat()
     items = []
     for raw in enriched.get("evidence_items") or []:
@@ -1848,16 +1840,16 @@ def _enrich_claim_bundle(
         item["url"] = matched_url
         content = str(fetched["content"])
         quote = str(item.get("quote") or "").strip()
-        if (
-            not quote
-            or _normalize_text(quote) not in _normalize_text(content)
-        ):
-            quote = _best_source_excerpt(
-                content,
-                assertions_by_evidence.get(str(item.get("id")), []),
-            )
         if not quote:
-            raise RuntimeError(f"no source-backed quote available for {url}")
+            raise RuntimeError(
+                "evidence item has no verbatim quote: "
+                f"{item.get('id') or '<missing id>'}"
+            )
+        if _normalize_text(quote) not in _normalize_text(content):
+            raise RuntimeError(
+                "evidence quote is not present in fetched source: "
+                f"{item.get('id') or '<missing id>'} ({matched_url})"
+            )
         quote = quote[:1200]
         item["title"] = str(
             item.get("title") or fetched.get("title") or url
@@ -1925,28 +1917,6 @@ def _canonical_evidence_url(url: str) -> str:
 
 def _normalize_text(value: str) -> str:
     return " ".join(value.split()).casefold()
-
-
-def _best_source_excerpt(content: str, assertions: list[str]) -> str:
-    chunks = [
-        chunk.strip()
-        for chunk in re.split(r"\n{2,}|(?<=[.!?])\s+(?=[A-Z])", content)
-        if len(chunk.strip()) >= 40
-    ]
-    if not chunks:
-        return content.strip()[:800]
-    terms = {
-        token
-        for assertion in assertions
-        for token in re.findall(r"[a-z0-9-]{4,}", assertion.casefold())
-    }
-    best = max(
-        chunks,
-        key=lambda chunk: sum(
-            1 for term in terms if term in chunk.casefold()
-        ),
-    )
-    return best[:1200]
 
 
 def _should_deep_research(
