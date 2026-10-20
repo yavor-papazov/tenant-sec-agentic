@@ -1068,18 +1068,22 @@ class AssessmentPipeline(BaseAgent):
                         cfg,
                         fetched,
                     )
+                _validate_assessment_candidate(
+                    output,
+                    str(control_def.get("id") or ""),
+                )
             except RuntimeError as exc:
                 ctx.session.state[
                     "assessor_rejected_output"
                 ] = deepcopy(output)
                 ctx.session.state["assessor_rejected_error"] = str(exc)
                 if (
-                    "evidence validation failed" not in str(exc)
+                    not _correctable_assessment_error(exc)
                     or attempt >= cfg.limits.max_retries_per_call
                 ):
                     raise
                 logger.warning(
-                    "assessor evidence retry %d after error: %s",
+                    "assessor validation retry %d after error: %s",
                     attempt + 1,
                     exc,
                 )
@@ -1093,7 +1097,8 @@ class AssessmentPipeline(BaseAgent):
                     "passages or use ellipses inside a quote; split them "
                     "into separate evidence items. Back supported claims "
                     "with official technical or "
-                    "policy sources. Otherwise mark or remove the claim."
+                    "policy sources. Otherwise mark or remove the claim. "
+                    "Every met criterion must cite only supported claims."
                 )
                 continue
             ctx.session.state.pop("assessor_rejected_output", None)
@@ -1521,14 +1526,18 @@ class AssessmentPipeline(BaseAgent):
                         cfg,
                         fetched,
                     )
+                _validate_assessment_candidate(
+                    revised,
+                    str(control_def.get("id") or ""),
+                )
             except RuntimeError as exc:
                 if (
-                    "evidence validation failed" not in str(exc)
+                    not _correctable_assessment_error(exc)
                     or attempt >= cfg.limits.max_retries_per_call
                 ):
                     raise
                 logger.warning(
-                    "research revision evidence retry %d after error: %s",
+                    "research revision validation retry %d after error: %s",
                     attempt + 1,
                     exc,
                 )
@@ -1539,7 +1548,8 @@ class AssessmentPipeline(BaseAgent):
                     "replacement. Copy every "
                     "evidence quote verbatim from the fetched document and "
                     "back supported claims with official technical or policy "
-                    "sources. Otherwise mark or remove the claim."
+                    "sources. Otherwise mark or remove the claim. Every met "
+                    "criterion must cite only supported claims."
                 )
                 continue
             ctx.session.state["deep_research_revision_output"] = revised
@@ -2274,6 +2284,40 @@ def _load_stage_checkpoint(
             if pending_challenge is not None:
                 deep["_pending_challenge"] = pending_challenge
     return docs, assessor, skeptic, consistency, deep
+
+
+def _correctable_assessment_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "evidence validation failed" in message
+        or "assessment candidate validation failed" in message
+    )
+
+
+def _validate_assessment_candidate(
+    candidate: dict[str, Any],
+    control_id: str,
+) -> None:
+    """Reject internally inconsistent claim chains before publication."""
+    status = str(candidate.get("status") or "unknown")
+    score = candidate.get("score")
+    services = candidate.get("services") if score == "mixed" else None
+    probe = {
+        "control": control_id,
+        "provider": "candidate",
+        "status": "needs_human_review",
+        "result_status": status,
+        "recommended_score": score,
+        "recommended_services": services,
+        "doc_fetch": {"retrieval_outcome": "succeeded"},
+        "assessor": candidate,
+    }
+    errors = validate_release_ready_assessment(probe)
+    if errors:
+        raise RuntimeError(
+            "assessment candidate validation failed: "
+            + " | ".join(errors)
+        )
 
 
 def _enrich_claim_bundle(

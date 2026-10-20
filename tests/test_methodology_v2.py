@@ -45,6 +45,7 @@ from tenant_sec_agentic.pipeline import (
     _retrieval_outcome,
     _service_scope_contract,
     _validate_deep_question_coverage,
+    _validate_assessment_candidate,
     _validate_service_scope_result,
     current_assessment_input_hashes,
     prompt_hashes,
@@ -1299,6 +1300,24 @@ def test_claim_bundle_enrichment_hashes_fetched_source(tmp_path):
     item = enriched["evidence_items"][0]
     assert item["content_hash"].startswith("sha256:")
     assert item["applicability"]["offering"] == "public"
+
+
+def test_candidate_rejects_met_criterion_with_unsupported_claim():
+    candidate = {
+        "status": "assessed",
+        "score": 2,
+        "services": {},
+        "evidence": "Candidate evidence.",
+        "confidence": "high",
+        **_claims(),
+    }
+    _validate_assessment_candidate(candidate, "enc.cmk")
+    candidate["claims"][0]["result"] = "unsupported"
+    with pytest.raises(
+        RuntimeError,
+        match="met L2 criterion cites non-supported claim",
+    ):
+        _validate_assessment_candidate(candidate, "enc.cmk")
 
 
 def test_claim_bundle_rejects_non_verbatim_evidence_quote(tmp_path):
