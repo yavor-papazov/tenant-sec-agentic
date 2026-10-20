@@ -515,6 +515,11 @@ class AssessmentPipeline(BaseAgent):
                                         or {},
                                     )
                                 except Exception as exc:
+                                    _sync_fetched_documents(
+                                        doc_fetch_out,
+                                        st.get(STATE_FETCHED_DOCUMENTS)
+                                        or {},
+                                    )
                                     logger.exception(
                                         "required deep research failed for "
                                         "%s: %s",
@@ -1183,6 +1188,7 @@ class AssessmentPipeline(BaseAgent):
             or {},
         )
         _fetch_missing_deep_sources(ctx, output)
+        ctx.session.state["deep_research_output"] = output
         return output
 
     async def _run_research_revision(
@@ -1251,6 +1257,25 @@ class AssessmentPipeline(BaseAgent):
                     "research revision agent produced no structured output"
                 )
             _normalize_service_array(revised)
+            base_assessment = (
+                ctx.session.state.get("assessor_output") or {}
+            )
+            if (
+                revised.get("status") == "assessed"
+                and _assessment_verdicts_match(
+                    revised,
+                    base_assessment,
+                )
+            ):
+                for key in (
+                    "evidence_items",
+                    "claims",
+                    "criteria_results",
+                    "sources_used",
+                    "licensing",
+                ):
+                    if base_assessment.get(key):
+                        revised[key] = deepcopy(base_assessment[key])
             try:
                 if revised.get("status") == "assessed":
                     revised = _enrich_claim_bundle(
