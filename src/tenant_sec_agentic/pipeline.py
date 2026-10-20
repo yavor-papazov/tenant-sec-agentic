@@ -258,6 +258,8 @@ class AssessmentPipeline(BaseAgent):
             for k in (
                 "doc_fetch_output",
                 "assessor_output",
+                "assessor_rejected_output",
+                "assessor_rejected_error",
                 "skeptic_output",
                 "post_research_skeptic_output",
                 "consistency_output",
@@ -333,10 +335,45 @@ class AssessmentPipeline(BaseAgent):
                             cid,
                         )
                     else:
-                        await self._run_doc_fetch(
-                            ctx, cfg, methodology_text, control_def
+                        failed_assessor_checkpoint = (
+                            _load_failed_assessor_checkpoint(
+                                cfg,
+                                cid,
+                                hashes,
+                                input_hashes,
+                            )
                         )
-                        doc_fetch_out = st.get("doc_fetch_output") or {}
+                        if failed_assessor_checkpoint is not None:
+                            (
+                                doc_fetch_out,
+                                rejected_assessor,
+                                rejected_error,
+                            ) = failed_assessor_checkpoint
+                            st["doc_fetch_output"] = doc_fetch_out
+                            st[STATE_FETCHED_DOCUMENTS] = (
+                                _fetched_documents_from_bundle(
+                                    doc_fetch_out
+                                )
+                            )
+                            if rejected_assessor is not None:
+                                st[
+                                    "assessor_rejected_output"
+                                ] = rejected_assessor
+                            st[
+                                "assessor_rejected_error"
+                            ] = rejected_error
+                            logger.info(
+                                "resuming %s from fetched documents "
+                                "after rejected assessor evidence",
+                                cid,
+                            )
+                        else:
+                            await self._run_doc_fetch(
+                                ctx, cfg, methodology_text, control_def
+                            )
+                            doc_fetch_out = (
+                                st.get("doc_fetch_output") or {}
+                            )
                         retrieval_outcome = _retrieval_outcome(doc_fetch_out)
                         doc_fetch_out["retrieval_outcome"] = retrieval_outcome
                         if retrieval_outcome in {"failed", "exhausted"}:
@@ -825,6 +862,14 @@ class AssessmentPipeline(BaseAgent):
             )
             if (deep_out or {}).get("human_adjudication_required"):
                 assessment["human_adjudication_required"] = True
+            rejected_assessor = st.get("assessor_rejected_output")
+            if err_detail and isinstance(rejected_assessor, dict):
+                assessment[
+                    "assessor_rejected_output"
+                ] = rejected_assessor
+                assessment["assessor_rejected_error"] = str(
+                    st.get("assessor_rejected_error") or err_detail
+                )
             internal_errs = validate_internal_assessment(assessment)
             if internal_errs:
                 logger.warning("internal validation: %s", internal_errs)
@@ -959,7 +1004,32 @@ class AssessmentPipeline(BaseAgent):
             f"{json.dumps(docs, default=str)}```"
         )
         fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+        rejected = ctx.session.state.get("assessor_rejected_output")
+        rejected_error = str(
+            ctx.session.state.get("assessor_rejected_error") or ""
+        )
         correction = ""
+        if isinstance(rejected, dict):
+            correction = (
+                "\nPREVIOUS ASSESSMENT REJECTED:\n"
+                f"{rejected_error}\n"
+                "Repair this previous structured assessment rather than "
+                "starting over:\n"
+                f"```json\n{json.dumps(rejected, default=str)}```\n"
+                "Every evidence quote must be one contiguous verbatim "
+                "excerpt from one fetched document. Never join separated "
+                "passages or use ellipses inside a quote; split them into "
+                "separate evidence items and link the claim to each item."
+            )
+        elif rejected_error:
+            correction = (
+                "\nA PREVIOUS ASSESSMENT FAILED EVIDENCE VALIDATION:\n"
+                f"{rejected_error}\n"
+                "Every evidence quote must be one contiguous verbatim "
+                "excerpt from one fetched document. Never join separated "
+                "passages or use ellipses inside a quote; split them into "
+                "separate evidence items and link the claim to each item."
+            )
         for attempt in range(cfg.limits.max_retries_per_call + 1):
             ctx.session.state.pop("assessor_output", None)
             await _inject_user_and_drain(
@@ -983,6 +1053,10 @@ class AssessmentPipeline(BaseAgent):
                         fetched,
                     )
             except RuntimeError as exc:
+                ctx.session.state[
+                    "assessor_rejected_output"
+                ] = deepcopy(output)
+                ctx.session.state["assessor_rejected_error"] = str(exc)
                 if (
                     "evidence validation failed" not in str(exc)
                     or attempt >= cfg.limits.max_retries_per_call
@@ -999,10 +1073,15 @@ class AssessmentPipeline(BaseAgent):
                     "Correct every listed failure in one complete "
                     "replacement. Copy every "
                     "evidence quote verbatim from the documentation bundle "
-                    "and back supported claims with official technical or "
+                    "as one contiguous excerpt. Never combine separated "
+                    "passages or use ellipses inside a quote; split them "
+                    "into separate evidence items. Back supported claims "
+                    "with official technical or "
                     "policy sources. Otherwise mark or remove the claim."
                 )
                 continue
+            ctx.session.state.pop("assessor_rejected_output", None)
+            ctx.session.state.pop("assessor_rejected_error", None)
             ctx.session.state["assessor_output"] = output
             return
         raise RuntimeError("assessor evidence retries exhausted")
@@ -1784,6 +1863,67 @@ def _user_block_doc_fetch(cfg: AssessmentConfig, control_def: dict[str, Any]) ->
         f"{json.dumps(cfg.evidence_seeds.get(str(control_def.get('id')), []))}\n"
         f"DESCRIPTION:\n{control_def.get('description','')}\n"
     )
+
+
+def _load_failed_assessor_checkpoint(
+    cfg: AssessmentConfig,
+    control_id: str,
+    hashes: dict[str, str],
+    input_hashes: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, str] | None:
+    """Recover fetched documents after assessor evidence was rejected."""
+    if not cfg.session.resume_artifacts:
+        return None
+    path = (
+        cfg.paths.assessments_dir
+        / cfg.provider.slug
+        / f"{control_id}.yaml"
+    )
+    if not path.is_file():
+        return None
+    try:
+        artifact = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    error_detail = str(
+        (artifact or {}).get("assessor_rejected_error")
+        or (artifact or {}).get("error_detail")
+        or ""
+    )
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("status") not in {"error", "validation_error"}
+        or artifact.get("assessment_id")
+        != cfg.provider.assessment_id
+        or "evidence validation failed" not in error_detail
+    ):
+        return None
+    saved_hashes = artifact.get("prompt_hashes") or {}
+    if (
+        not hashes.get("doc_fetch")
+        or saved_hashes.get("doc_fetch")
+        != hashes.get("doc_fetch")
+    ):
+        return None
+    if input_hashes is not None:
+        saved_inputs = artifact.get("input_hashes") or {}
+        if any(
+            saved_inputs.get(name) != digest
+            for name, digest in input_hashes.items()
+            if name != "peer_context"
+        ):
+            return None
+    docs = artifact.get("doc_fetch")
+    if (
+        not isinstance(docs, dict)
+        or not docs.get("docs_fetched")
+        or _retrieval_outcome(docs) != "succeeded"
+    ):
+        return None
+    rejected = artifact.get("assessor_rejected_output")
+    if not isinstance(rejected, dict):
+        rejected = None
+    return deepcopy(docs), deepcopy(rejected), error_detail
 
 
 def _load_stage_checkpoint(

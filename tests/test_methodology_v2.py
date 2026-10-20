@@ -30,6 +30,7 @@ from tenant_sec_agentic.pipeline import (
     _drain_agent,
     _enrich_claim_bundle,
     _final_recommendation,
+    _load_failed_assessor_checkpoint,
     _load_stage_checkpoint,
     _merge_research_findings,
     _missing_deep_questions,
@@ -913,6 +914,73 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
     )
     assert checkpoint is not None
     assert checkpoint[1]["score"] == 2
+
+
+def test_failed_assessor_reuses_fetched_documents(tmp_path):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    rejected = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "The quote combined separated passages.",
+    }
+    artifact = {
+        "status": "error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {
+            "doc_fetch": "docs",
+            "assessor": "old-assessor",
+        },
+        "input_hashes": {
+            "control_definition": "control",
+            "methodology": "methodology",
+            "provider_scope": "provider",
+            "peer_context": "old-peers",
+            "evidence_seeds": "seeds",
+        },
+        "doc_fetch": {
+            "retrieval_outcome": "succeeded",
+            "docs_fetched": [
+                {
+                    "url": "https://example.com/docs",
+                    "content": "Exact fetched source text.",
+                }
+            ],
+            "doc_quality": "adequate",
+        },
+        "assessor_rejected_output": rejected,
+        "assessor_rejected_error": (
+            "evidence validation failed: quote was not contiguous"
+        ),
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_failed_assessor_checkpoint(
+        config,
+        "enc.cmk",
+        {
+            "doc_fetch": "docs",
+            "assessor": "new-assessor",
+        },
+        {
+            "control_definition": "control",
+            "methodology": "methodology",
+            "provider_scope": "provider",
+            "peer_context": "new-peers",
+            "evidence_seeds": "seeds",
+        },
+    )
+    assert checkpoint is not None
+    docs, previous, error = checkpoint
+    assert docs["docs_fetched"][0]["content"] == (
+        "Exact fetched source text."
+    )
+    assert previous == rejected
+    assert "not contiguous" in error
 
 
 def test_failed_artifact_reuses_research_before_revision(tmp_path):
