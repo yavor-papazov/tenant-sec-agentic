@@ -520,17 +520,67 @@ class AssessmentPipeline(BaseAgent):
                                         st.get(STATE_FETCHED_DOCUMENTS)
                                         or {},
                                     )
-                                    logger.exception(
-                                        "required deep research failed for "
-                                        "%s: %s",
-                                        cid,
-                                        exc,
+                                    saved_findings = st.get(
+                                        "deep_research_output"
                                     )
-                                    err_detail = (
-                                        "Required deep research failed: "
-                                        f"{exc}"
-                                    )
-                                    deep_out = None
+                                    if (
+                                        "evidence validation failed"
+                                        in str(exc)
+                                        and isinstance(
+                                            saved_findings,
+                                            dict,
+                                        )
+                                        and isinstance(
+                                            assessor_out,
+                                            dict,
+                                        )
+                                        and assessor_out.get("status")
+                                    ):
+                                        logger.warning(
+                                            "initial research revision "
+                                            "evidence failed for %s; "
+                                            "preserving the source-valid "
+                                            "assessor candidate for human "
+                                            "review: %s",
+                                            cid,
+                                            exc,
+                                        )
+                                        deep_out = {
+                                            **saved_findings,
+                                            "revised_assessment": deepcopy(
+                                                assessor_out
+                                            ),
+                                            "post_research_skeptic": (
+                                                _reconcile_skeptic(
+                                                    assessor_out,
+                                                    skeptic_out or {},
+                                                )
+                                            ),
+                                            "human_adjudication_required": (
+                                                True
+                                            ),
+                                        }
+                                        st[
+                                            "deep_research_output"
+                                        ] = deep_out
+                                        warning_detail = (
+                                            "Automated research revision "
+                                            "could not produce a "
+                                            "source-valid replacement; "
+                                            "human adjudication is required"
+                                        )
+                                    else:
+                                        logger.exception(
+                                            "required deep research failed "
+                                            "for %s: %s",
+                                            cid,
+                                            exc,
+                                        )
+                                        err_detail = (
+                                            "Required deep research failed: "
+                                            f"{exc}"
+                                        )
+                                        deep_out = None
 
                         if deep_out is not None and not err_detail:
                             revised = deep_out.get("revised_assessment")
@@ -1873,6 +1923,27 @@ def _load_stage_checkpoint(
             and stored_post_research.get("verdict") != "confirm"
         ):
             pending_challenge = stored_post_research
+    terminal_initial_revision_failure = (
+        isinstance(stored_deep, dict)
+        and not isinstance(
+            stored_deep.get("revised_assessment"),
+            dict,
+        )
+        and "evidence validation failed"
+        in str(artifact.get("error_detail") or "")
+        and all(
+            hashes.get(stage)
+            and saved_hashes.get(stage) == hashes.get(stage)
+            for stage in (
+                "skeptic",
+                "consistency",
+                "deep_research",
+                "research_revision",
+            )
+        )
+        and peer_context_current
+        and skeptic is not None
+    )
     terminal_adjudication = (
         pending_challenge is not None
         and isinstance(stored_deep, dict)
@@ -1886,6 +1957,16 @@ def _load_stage_checkpoint(
             )
         )
     )
+    if terminal_initial_revision_failure:
+        deep = {
+            **stored_deep,
+            "revised_assessment": deepcopy(assessor),
+            "post_research_skeptic": _reconcile_skeptic(
+                assessor,
+                skeptic,
+            ),
+            "human_adjudication_required": True,
+        }
     if (
         (pending_challenge is None or terminal_adjudication)
         and all(

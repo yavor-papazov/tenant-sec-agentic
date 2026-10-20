@@ -998,6 +998,89 @@ def test_failed_artifact_reuses_research_before_revision(tmp_path):
     )
 
 
+def test_failed_initial_revision_preserves_valid_assessor_for_review(
+    tmp_path,
+):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Supported by official documentation.",
+        "confidence": "high",
+        "sources_used": ["https://example.com/docs/cmk"],
+        **_claims(),
+    }
+    skeptic = {
+        "status": "assessed",
+        "score": 1,
+        "reasoning": "The evidence supports a lower score.",
+        "deep_research_questions": [
+            "Does the service support CMK?"
+        ],
+        "verdict": "flag_deep_research",
+    }
+    artifact = {
+        "status": "error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {
+            "doc_fetch": "docs",
+            "assessor": "assessor",
+            "skeptic": "skeptic",
+            "consistency": "consistency",
+            "deep_research": "research",
+            "research_revision": "revision",
+        },
+        "doc_fetch": {
+            "docs_fetched": [{"url": "https://example.com/docs"}],
+            "doc_quality": "adequate",
+        },
+        "assessor": assessor,
+        "skeptic": skeptic,
+        "consistency": {
+            "consistency_flags": [],
+            "deep_research_triggered": True,
+            "overall_consistency": "suspicious",
+        },
+        "deep_research": {
+            "questions_investigated": [
+                {
+                    "question": "Does the service support CMK?",
+                    "answer": "Yes.",
+                    "sources": ["https://example.com/docs"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved": [],
+        },
+        "error_detail": (
+            "evidence validation failed: quote was not supported"
+        ),
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_stage_checkpoint(
+        config,
+        "enc.cmk",
+        {
+            "doc_fetch": "docs",
+            "assessor": "assessor",
+            "skeptic": "skeptic",
+            "consistency": "consistency",
+            "deep_research": "research",
+            "research_revision": "revision",
+        },
+    )
+    assert checkpoint is not None
+    assert checkpoint[4]["revised_assessment"] == assessor
+    assert checkpoint[4]["human_adjudication_required"] is True
+    assert "_needs_revision" not in checkpoint[4]
+
+
 def test_validation_artifact_resumes_from_raw_assessor(tmp_path):
     config = _config(tmp_path)
     config.session.resume_artifacts = True
