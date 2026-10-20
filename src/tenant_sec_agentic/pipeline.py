@@ -650,16 +650,50 @@ class AssessmentPipeline(BaseAgent):
                                                 "human_adjudication_required"
                                             ] = True
                                 except Exception as exc:
-                                    logger.exception(
-                                        "post-research challenge failed for "
-                                        "%s: %s",
-                                        cid,
-                                        exc,
-                                    )
-                                    err_detail = (
-                                        "Post-research challenge failed: "
-                                        f"{exc}"
-                                    )
+                                    if (
+                                        "evidence validation failed"
+                                        in str(exc)
+                                        and isinstance(
+                                            deep_out.get(
+                                                "revised_assessment"
+                                            ),
+                                            dict,
+                                        )
+                                        and isinstance(
+                                            deep_out.get(
+                                                "revision_challenge"
+                                            ),
+                                            dict,
+                                        )
+                                    ):
+                                        logger.warning(
+                                            "adjudication revision evidence "
+                                            "failed for %s; preserving the "
+                                            "last valid candidate for human "
+                                            "review: %s",
+                                            cid,
+                                            exc,
+                                        )
+                                        deep_out[
+                                            "human_adjudication_required"
+                                        ] = True
+                                        warning_detail = (
+                                            "Automated adjudication could "
+                                            "not produce a source-valid "
+                                            "replacement; human "
+                                            "adjudication is required"
+                                        )
+                                    else:
+                                        logger.exception(
+                                            "post-research challenge failed "
+                                            "for %s: %s",
+                                            cid,
+                                            exc,
+                                        )
+                                        err_detail = (
+                                            "Post-research challenge failed: "
+                                            f"{exc}"
+                                        )
 
             except Exception as e:
                 logger.exception("control %s failed: %s", cid, e)
@@ -1847,6 +1881,9 @@ def _load_stage_checkpoint(
             stored_deep.get("human_adjudication_required") is True
             or "human adjudication is required"
             in str(artifact.get("error_detail") or "")
+            or str(artifact.get("error_detail") or "").startswith(
+                "Post-research challenge failed: evidence validation failed"
+            )
         )
     )
     if (
