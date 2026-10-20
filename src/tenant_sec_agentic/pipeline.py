@@ -895,7 +895,7 @@ class AssessmentPipeline(BaseAgent):
                     )
             except RuntimeError as exc:
                 if (
-                    "evidence quote" not in str(exc)
+                    "evidence validation failed" not in str(exc)
                     or attempt >= cfg.limits.max_retries_per_call
                 ):
                     raise
@@ -907,10 +907,11 @@ class AssessmentPipeline(BaseAgent):
                 correction = (
                     "\nPREVIOUS ASSESSMENT REJECTED:\n"
                     f"{exc}\n"
-                    "Return a complete corrected replacement. Copy every "
+                    "Correct every listed failure in one complete "
+                    "replacement. Copy every "
                     "evidence quote verbatim from the documentation bundle "
-                    "and remove any claim that the fetched text does not "
-                    "support."
+                    "and back supported claims with official technical or "
+                    "policy sources. Otherwise mark or remove the claim."
                 )
                 continue
             ctx.session.state["assessor_output"] = output
@@ -1259,7 +1260,7 @@ class AssessmentPipeline(BaseAgent):
                     )
             except RuntimeError as exc:
                 if (
-                    "evidence quote" not in str(exc)
+                    "evidence validation failed" not in str(exc)
                     or attempt >= cfg.limits.max_retries_per_call
                 ):
                     raise
@@ -1271,9 +1272,11 @@ class AssessmentPipeline(BaseAgent):
                 correction = (
                     "\nPREVIOUS REVISION REJECTED:\n"
                     f"{exc}\n"
-                    "Return a complete corrected replacement. Copy every "
+                    "Correct every listed failure in one complete "
+                    "replacement. Copy every "
                     "evidence quote verbatim from the fetched document and "
-                    "remove any claim that the fetched text does not support."
+                    "back supported claims with official technical or policy "
+                    "sources. Otherwise mark or remove the claim."
                 )
                 continue
             ctx.session.state["deep_research_revision_output"] = revised
@@ -1914,6 +1917,7 @@ def _enrich_claim_bundle(
     enriched = dict(assessor)
     now = datetime.now(timezone.utc).isoformat()
     items = []
+    errors: list[str] = []
     for raw in enriched.get("evidence_items") or []:
         item = dict(raw)
         url = str(item.get("url") or "")
@@ -1922,22 +1926,26 @@ def _enrich_claim_bundle(
             fetched_documents,
         )
         if not isinstance(fetched, dict) or not fetched.get("content"):
-            raise RuntimeError(
-                f"claim evidence URL was not fetched: {url or '<missing>'}"
+            errors.append(
+                "claim evidence URL was not fetched: "
+                f"{url or '<missing>'}"
             )
+            continue
         item["url"] = matched_url
         content = str(fetched["content"])
         quote = str(item.get("quote") or "").strip()
         if not quote:
-            raise RuntimeError(
+            errors.append(
                 "evidence item has no verbatim quote: "
                 f"{item.get('id') or '<missing id>'}"
             )
+            continue
         if _normalize_text(quote) not in _normalize_text(content):
-            raise RuntimeError(
+            errors.append(
                 "evidence quote is not present in fetched source: "
                 f"{item.get('id') or '<missing id>'} ({matched_url})"
             )
+            continue
         quote = quote[:1200]
         item["title"] = str(
             item.get("title") or fetched.get("title") or url
@@ -1955,6 +1963,31 @@ def _enrich_claim_bundle(
         }
         items.append(item)
     enriched["evidence_items"] = items
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in items
+        if item.get("id")
+    }
+    for claim in enriched.get("claims") or []:
+        if not isinstance(claim, dict) or claim.get("result") != "supported":
+            continue
+        linked = [
+            evidence_by_id[str(evidence_id)]
+            for evidence_id in claim.get("evidence_item_ids") or []
+            if str(evidence_id) in evidence_by_id
+        ]
+        if linked and all(
+            item.get("source_class") in {"support", "secondary"}
+            for item in linked
+        ):
+            errors.append(
+                f"supported claim {claim.get('id')!r} relies only on "
+                "weak sources"
+            )
+    if errors:
+        raise RuntimeError(
+            "evidence validation failed: " + " | ".join(errors)
+        )
     return enriched
 
 
