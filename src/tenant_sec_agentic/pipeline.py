@@ -738,6 +738,8 @@ class AssessmentPipeline(BaseAgent):
             raise RuntimeError(
                 "assessor agent produced no structured output"
             )
+        _normalize_service_array(output)
+        ctx.session.state["assessor_output"] = output
         if isinstance(output, dict) and output.get("status") == "assessed":
             fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
             ctx.session.state["assessor_output"] = _enrich_claim_bundle(
@@ -779,6 +781,7 @@ class AssessmentPipeline(BaseAgent):
             raise RuntimeError(
                 "skeptic agent produced no structured output"
             )
+        _normalize_service_array(independent)
         ctx.session.state["skeptic_output"] = _reconcile_skeptic(
             ctx.session.state.get("assessor_output") or {},
             independent,
@@ -880,6 +883,8 @@ class AssessmentPipeline(BaseAgent):
             raise RuntimeError(
                 "post-research skeptic produced no structured output"
             )
+        _normalize_service_array(output)
+        ctx.session.state["post_research_skeptic_output"] = output
 
     async def _run_deep_research(
         self,
@@ -956,19 +961,39 @@ def _service_scope_contract(
     if not control_def.get("service_scoped"):
         return (
             "SERVICE SCOPE CONTRACT:\n"
-            "This is offering-scoped. Return an empty services object and "
+            "This is offering-scoped. Return an empty services array and "
             "never return a mixed score."
         )
     return (
         "SERVICE SCOPE CONTRACT:\n"
         "This control is service-scoped. If the top-level status is assessed, "
-        'the top-level score MUST be "mixed" and the services object MUST '
-        "contain exactly every configured service id, even when every "
-        "service has the same numeric score. Each service needs status, "
+        'the top-level score MUST be "mixed" and the services array MUST '
+        "contain exactly one item for every configured service id, even when "
+        "every service has the same numeric score. Each service item needs "
+        "service_id, status, "
         "score (0-3 when assessed, null otherwise), evidence, confidence, "
         "and exact fetched sources_used. Do not return an assessed flat "
         f"score. Required service ids:\n{json.dumps(service_ids)}"
     )
+
+
+def _normalize_service_array(payload: dict[str, Any]) -> None:
+    """Convert constrained-output service arrays to canonical service maps."""
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw in services:
+        if not isinstance(raw, dict):
+            raise RuntimeError("service result must be an object")
+        service = dict(raw)
+        service_id = str(service.pop("service_id", "")).strip()
+        if not service_id:
+            raise RuntimeError("service result is missing service_id")
+        if service_id in normalized:
+            raise RuntimeError(f"duplicate service result: {service_id}")
+        normalized[service_id] = service
+    payload["services"] = normalized
 
 
 def _fetch_missing_deep_sources(
@@ -1060,9 +1085,13 @@ def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
                     item["quote"] = item["quote"][:1200]
                 if isinstance(item.get("title"), str):
                     item["title"] = item["title"][:160]
-        return DeepResearchStructured.model_validate(parsed).model_dump(
+        validated = DeepResearchStructured.model_validate(parsed).model_dump(
             mode="json"
         )
+        revised_output = validated.get("revised_assessment")
+        if isinstance(revised_output, dict):
+            _normalize_service_array(revised_output)
+        return validated
     except ValueError as exc:
         raise RuntimeError(
             f"deep research structured output was invalid: {exc}"

@@ -32,6 +32,7 @@ from tenant_sec_agentic.pipeline import (
     _load_stage_checkpoint,
     _mock_assessor,
     _normalize_fetched_documents,
+    _normalize_service_array,
     _normalize_service_evidence,
     _parse_deep_research_output,
     _reconcile_skeptic,
@@ -371,7 +372,7 @@ def test_deep_research_truncates_oversized_verbatim_quote():
         "revised_assessment": {
             "status": "assessed",
             "score": 2,
-            "services": {},
+            "services": [],
             "evidence": "Supported.",
             "confidence": "high",
             "sources_used": ["https://example.com/docs"],
@@ -451,6 +452,25 @@ def test_service_scope_contract_lists_every_required_service(tmp_path):
     for service in config.provider.services_in_scope:
         assert service["id"] in contract
     assert 'score MUST be "mixed"' in contract
+
+
+def test_constrained_service_array_normalizes_to_canonical_map():
+    payload = {
+        "services": [
+            {
+                "service_id": "cloud-storage",
+                "status": "assessed",
+                "score": 3,
+                "evidence": "CMEK is supported.",
+                "confidence": "high",
+                "sources_used": ["https://example.com/storage"],
+            }
+        ]
+    }
+    _normalize_service_array(payload)
+    assert set(payload["services"]) == {"cloud-storage"}
+    assert payload["services"]["cloud-storage"]["score"] == 3
+    assert "service_id" not in payload["services"]["cloud-storage"]
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():

@@ -54,6 +54,10 @@ class ServiceScore(BaseModel):
         return self
 
 
+class ServiceAssessment(ServiceScore):
+    service_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+
+
 class AssessorEvidenceItem(BaseModel):
     id: str = Field(pattern=r"^ev-[a-z0-9-]+$")
     url: str
@@ -104,7 +108,7 @@ class AssessorStructured(BaseModel):
             "status"
         )
     )
-    services: dict[str, ServiceScore] = Field(default_factory=dict)
+    services: list[ServiceAssessment] = Field(default_factory=list)
     evidence: str
     licensing: LicensingObservation = Field(
         default_factory=LicensingObservation
@@ -168,7 +172,7 @@ class SkepticStructured(BaseModel):
             "non-assessed status"
         ),
     )
-    services: dict[str, ServiceScore] = Field(default_factory=dict)
+    services: list[ServiceAssessment] = Field(default_factory=list)
     reasoning: str
     skepticism_flags: list[SkepticFlag] = Field(default_factory=list)
     deep_research_questions: list[str] = Field(default_factory=list)
