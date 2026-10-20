@@ -537,6 +537,14 @@ class AssessmentPipeline(BaseAgent):
                                     "Required deep research did not produce "
                                     "a revised assessment"
                                 )
+                            elif deep_out.get(
+                                "human_adjudication_required"
+                            ):
+                                warning_detail = (
+                                    "Independent challenge remains "
+                                    "unresolved after one adjudication pass; "
+                                    "human adjudication is required"
+                                )
                             else:
                                 try:
                                     await (
@@ -626,12 +634,16 @@ class AssessmentPipeline(BaseAgent):
                                             challenge.get("verdict")
                                             != "confirm"
                                         ):
-                                            err_detail = (
+                                            warning_detail = (
                                                 "Post-research independent "
                                                 "challenge remains "
                                                 "unresolved after one "
-                                                "adjudication pass"
+                                                "adjudication pass; human "
+                                                "adjudication is required"
                                             )
+                                            deep_out[
+                                                "human_adjudication_required"
+                                            ] = True
                                 except Exception as exc:
                                     logger.exception(
                                         "post-research challenge failed for "
@@ -722,6 +734,8 @@ class AssessmentPipeline(BaseAgent):
                 retrieval_outcome=retrieval_outcome,
                 error_detail=err_detail or warning_detail,
             )
+            if (deep_out or {}).get("human_adjudication_required"):
+                assessment["human_adjudication_required"] = True
             internal_errs = validate_internal_assessment(assessment)
             if internal_errs:
                 logger.warning("internal validation: %s", internal_errs)
@@ -1765,8 +1779,13 @@ def _load_stage_checkpoint(
             and stored_post_research.get("verdict") != "confirm"
         ):
             pending_challenge = stored_post_research
+    terminal_adjudication = (
+        pending_challenge is not None
+        and isinstance(stored_deep, dict)
+        and isinstance(stored_deep.get("revision_challenge"), dict)
+    )
     if (
-        pending_challenge is None
+        (pending_challenge is None or terminal_adjudication)
         and all(
             hashes.get(stage)
             and saved_hashes.get(stage) == hashes.get(stage)
@@ -1822,6 +1841,11 @@ def _load_stage_checkpoint(
             )
         ):
             deep = stored_deep
+            if terminal_adjudication:
+                deep = {
+                    **deep,
+                    "human_adjudication_required": True,
+                }
     if (
         deep is None
         and hashes.get("deep_research")
@@ -1978,6 +2002,15 @@ def _final_recommendation(
 
     revised = (deep or {}).get("revised_assessment")
     if isinstance(revised, dict) and revised.get("status"):
+        if (deep or {}).get("human_adjudication_required"):
+            status = str(revised.get("status") or "unknown")
+            score = revised.get("score")
+            services = (
+                revised.get("services")
+                if score == "mixed"
+                else None
+            )
+            return status, score, services, "low", revised
         post_research = (deep or {}).get("post_research_skeptic")
         if not isinstance(post_research, dict):
             return _conflicting_recommendation(

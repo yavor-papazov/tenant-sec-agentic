@@ -67,7 +67,8 @@ def render_bundle(provider: str, artifacts: list[dict[str, Any]]) -> str:
     flagged = [
         item
         for item in artifacts
-        if item.get("result_status") != "assessed"
+        if item.get("human_adjudication_required")
+        or item.get("result_status") != "assessed"
         or item.get("overall_confidence") != "high"
         or (item.get("skeptic") or {}).get("skepticism_flags")
         or (item.get("consistency") or {}).get("consistency_flags")
@@ -93,6 +94,11 @@ def render_bundle(provider: str, artifacts: list[dict[str, Any]]) -> str:
             f"- `{item.get('control')}`: recommendation "
             f"{item.get('recommended_score')}, "
             f"{item.get('overall_confidence')} confidence"
+            + (
+                " — **human adjudication required**"
+                if item.get("human_adjudication_required")
+                else ""
+            )
         )
     if not flagged:
         lines.append("- None")
@@ -101,6 +107,7 @@ def render_bundle(provider: str, artifacts: list[dict[str, Any]]) -> str:
         assessor = item.get("assessor") or {}
         skeptic = item.get("skeptic") or {}
         consistency = item.get("consistency") or {}
+        deep_research = item.get("deep_research") or {}
         evidence_by_id = {
             value.get("id"): value
             for value in assessor.get("evidence_items") or []
@@ -115,6 +122,12 @@ def render_bundle(provider: str, artifacts: list[dict[str, Any]]) -> str:
                 f"({item.get('result_status')})",
                 f"- Confidence: `{item.get('overall_confidence')}`",
                 f"- Consistency: `{consistency.get('overall_consistency', 'unknown')}`",
+                (
+                    "- Automation consensus: `disputed — human "
+                    "adjudication required`"
+                    if item.get("human_adjudication_required")
+                    else "- Automation consensus: `confirmed`"
+                ),
                 "",
                 "### Assessment",
                 "",
@@ -147,6 +160,21 @@ def render_bundle(provider: str, artifacts: list[dict[str, Any]]) -> str:
             lines.append(
                 f"- Consistency `{flag.get('severity', 'unknown')}`: "
                 f"{_text(flag.get('detail'))}"
+            )
+        if item.get("human_adjudication_required"):
+            post_research = (
+                deep_research.get("post_research_skeptic") or {}
+            )
+            lines.extend(
+                [
+                    "",
+                    "### Unresolved post-research challenge",
+                    "",
+                    _text(post_research.get("reasoning"))
+                    or "The independent result still differs from the "
+                    "source-backed candidate. Compare the service maps in "
+                    "the assessment artifact before approving or adjusting.",
+                ]
             )
     return "\n".join(lines) + "\n"
 

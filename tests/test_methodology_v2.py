@@ -293,6 +293,20 @@ def test_deep_research_revision_requires_post_research_challenge():
     assert (status, score) == ("assessed", 3)
     assert final is revised
 
+    status, score, _, confidence, final = _final_recommendation(
+        revised,
+        None,
+        {
+            "revised_assessment": revised,
+            "post_research_skeptic": {
+                "verdict": "flag_deep_research"
+            },
+            "human_adjudication_required": True,
+        },
+    )
+    assert (status, score, confidence) == ("assessed", 3, "low")
+    assert final is revised
+
 
 def test_mixed_service_disagreement_cannot_confirm_by_equal_average():
     assessor = {
