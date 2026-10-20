@@ -343,13 +343,18 @@ def test_deep_research_json_is_parsed_without_adk_schema_tool():
             "sources": ["https://example.com/iam"],
             "confidence": "unresolved"
           }],
-          "revised_assessment": null,
+          "revised_assessment": {
+            "status": "unknown",
+            "score": null,
+            "services": [],
+            "evidence": "Evidence remains incomplete."
+          },
           "unresolved": ["Confirm delegated grant behavior."]
         }
         ```"""
     )
     assert parsed["questions_investigated"][0]["confidence"] == "unresolved"
-    assert parsed["revised_assessment"] is None
+    assert parsed["revised_assessment"]["status"] == "unknown"
 
 
 def test_deep_research_must_answer_every_skeptic_question():
@@ -383,7 +388,12 @@ def test_deep_research_json_repairs_minor_model_syntax_errors():
             "sources": ["https://example.com/iam"],
             "confidence": "high"
           }],
-          "revised_assessment": null,
+          "revised_assessment": {
+            "status": "unknown",
+            "score": null,
+            "services": [],
+            "evidence": "Evidence remains incomplete."
+          },
           "unresolved": []
         }"""
     )

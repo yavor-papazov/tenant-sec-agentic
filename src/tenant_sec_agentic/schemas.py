@@ -35,15 +35,15 @@ class DocFetchStructured(BaseModel):
 
 
 class ServiceScore(BaseModel):
-    status: AssessmentStatus = "unknown"
+    status: AssessmentStatus
     score: int | None = Field(
         ge=0,
         le=3,
         description="Required: 0-3 when assessed, otherwise null",
     )
-    evidence: str = ""
-    confidence: Literal["high", "medium", "low"] = "low"
-    sources_used: list[str] = Field(default_factory=list)
+    evidence: str = Field(min_length=1)
+    confidence: Literal["high", "medium", "low"]
+    sources_used: list[str]
 
     @model_validator(mode="after")
     def score_matches_status(self) -> "ServiceScore":
@@ -70,7 +70,7 @@ class AssessorEvidenceItem(BaseModel):
         "support",
         "secondary",
     ]
-    quote: str = Field(min_length=1, max_length=1200)
+    quote: str = Field(min_length=1)
     services: list[str] = Field(default_factory=list)
 
 
@@ -222,5 +222,5 @@ class QuestionFinding(BaseModel):
 
 class DeepResearchStructured(BaseModel):
     questions_investigated: list[QuestionFinding] = Field(default_factory=list)
-    revised_assessment: AssessorStructured | None = None
+    revised_assessment: AssessorStructured
     unresolved: list[str] = Field(default_factory=list)

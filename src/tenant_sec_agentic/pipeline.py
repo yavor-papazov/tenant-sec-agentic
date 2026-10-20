@@ -1417,6 +1417,7 @@ def _enrich_claim_bundle(
             )
         if not quote:
             raise RuntimeError(f"no source-backed quote available for {url}")
+        quote = quote[:1200]
         item["title"] = str(
             item.get("title") or fetched.get("title") or url
         )

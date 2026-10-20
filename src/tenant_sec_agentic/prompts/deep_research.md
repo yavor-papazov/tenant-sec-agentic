@@ -12,7 +12,10 @@ evidence item. Never cite a URL that you only saw in search results. Prefer
 first-party technical documentation; do not replace available first-party
 evidence with a blog post.
 
-Return JSON matching deep research schema: questions_investigated, optional revised_assessment, unresolved.
+Return JSON matching deep research schema: questions_investigated,
+revised_assessment, unresolved. `revised_assessment` is mandatory: return a
+complete replacement assessment that incorporates the research, even when the
+original recommendation remains unchanged.
 The user message includes the exact JSON schema. Return only one JSON object,
 without Markdown fences or commentary.
 Missing or inconclusive evidence remains `unknown`; it is never converted to
