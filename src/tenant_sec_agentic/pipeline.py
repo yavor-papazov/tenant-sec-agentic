@@ -1183,24 +1183,56 @@ class AssessmentPipeline(BaseAgent):
             "FETCHED DOCUMENTATION:\n"
             f"```json\n{json.dumps(documents, default=str)}```"
         )
-        ctx.session.state.pop("deep_research_revision_output", None)
-        await _inject_user_and_drain(
-            agent,
-            ctx,
-            user_text,
-            cfg,
-            "research_revision",
-        )
-        revised = ctx.session.state.get("deep_research_revision_output")
-        if not isinstance(revised, dict) or not revised.get("status"):
-            raise RuntimeError(
-                "research revision agent produced no structured output"
+        correction = ""
+        for attempt in range(cfg.limits.max_retries_per_call + 1):
+            ctx.session.state.pop(
+                "deep_research_revision_output",
+                None,
             )
-        _normalize_service_array(revised)
-        if revised.get("status") == "assessed":
-            revised = _enrich_claim_bundle(revised, cfg, fetched)
-        ctx.session.state["deep_research_revision_output"] = revised
-        return revised
+            await _inject_user_and_drain(
+                agent,
+                ctx,
+                user_text + correction,
+                cfg,
+                "research_revision",
+            )
+            revised = ctx.session.state.get(
+                "deep_research_revision_output"
+            )
+            if not isinstance(revised, dict) or not revised.get("status"):
+                raise RuntimeError(
+                    "research revision agent produced no structured output"
+                )
+            _normalize_service_array(revised)
+            try:
+                if revised.get("status") == "assessed":
+                    revised = _enrich_claim_bundle(
+                        revised,
+                        cfg,
+                        fetched,
+                    )
+            except RuntimeError as exc:
+                if (
+                    "evidence quote" not in str(exc)
+                    or attempt >= cfg.limits.max_retries_per_call
+                ):
+                    raise
+                logger.warning(
+                    "research revision evidence retry %d after error: %s",
+                    attempt + 1,
+                    exc,
+                )
+                correction = (
+                    "\nPREVIOUS REVISION REJECTED:\n"
+                    f"{exc}\n"
+                    "Return a complete corrected replacement. Copy every "
+                    "evidence quote verbatim from the fetched document and "
+                    "remove any claim that the fetched text does not support."
+                )
+                continue
+            ctx.session.state["deep_research_revision_output"] = revised
+            return revised
+        raise RuntimeError("research revision retries exhausted")
 
 
 def _service_scope_contract(
