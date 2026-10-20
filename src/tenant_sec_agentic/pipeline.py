@@ -1117,6 +1117,11 @@ def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
             else None
         )
         if isinstance(revised, dict):
+            if not str(revised.get("evidence") or "").strip():
+                revised["evidence"] = (
+                    "See the per-service findings and source-backed claim "
+                    "chain for the assessment rationale."
+                )
             for item in revised.get("evidence_items") or []:
                 if not isinstance(item, dict):
                     continue

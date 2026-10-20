@@ -407,7 +407,6 @@ def test_deep_research_truncates_oversized_verbatim_quote():
             "status": "assessed",
             "score": 2,
             "services": [],
-            "evidence": "Supported.",
             "confidence": "high",
             "sources_used": ["https://example.com/docs"],
             "evidence_items": [
@@ -446,6 +445,7 @@ def test_deep_research_truncates_oversized_verbatim_quote():
         len(parsed["revised_assessment"]["evidence_items"][0]["quote"])
         == 1200
     )
+    assert "source-backed claim chain" in parsed["revised_assessment"]["evidence"]
 
 
 def test_service_scoped_release_requires_complete_mixed_result():
