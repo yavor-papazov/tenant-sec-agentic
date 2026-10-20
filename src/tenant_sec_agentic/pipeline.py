@@ -440,8 +440,7 @@ class AssessmentPipeline(BaseAgent):
                                     .max_search_calls_per_deep_research
                                 )
                                 st["deep_research_max_fetch"] = (
-                                    cfg.limits
-                                    .max_fetch_calls_per_deep_research
+                                    _deep_fetch_limit(cfg, control_def)
                                 )
                                 st.pop(STATE_DEEP_SEARCH_COUNT, None)
                                 st.pop(STATE_DEEP_FETCH_COUNT, None)
@@ -974,6 +973,19 @@ def _service_scope_contract(
         "score (0-3 when assessed, null otherwise), evidence, confidence, "
         "and exact fetched sources_used. Do not return an assessed flat "
         f"score. Required service ids:\n{json.dumps(service_ids)}"
+    )
+
+
+def _deep_fetch_limit(
+    cfg: AssessmentConfig,
+    control_def: dict[str, Any],
+) -> int:
+    configured = cfg.limits.max_fetch_calls_per_deep_research
+    if not control_def.get("service_scoped"):
+        return configured
+    return min(
+        cfg.limits.max_fetch_calls_per_run,
+        max(configured, len(cfg.provider.services_in_scope)),
     )
 
 

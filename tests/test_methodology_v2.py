@@ -26,6 +26,7 @@ from tenant_sec_agentic.config import (
 )
 from tenant_sec_agentic.pipeline import (
     _canonical_evidence_url,
+    _deep_fetch_limit,
     _drain_agent,
     _enrich_claim_bundle,
     _final_recommendation,
@@ -452,6 +453,12 @@ def test_service_scope_contract_lists_every_required_service(tmp_path):
     for service in config.provider.services_in_scope:
         assert service["id"] in contract
     assert 'score MUST be "mixed"' in contract
+    config.limits.max_fetch_calls_per_deep_research = 2
+    assert _deep_fetch_limit(config, {"service_scoped": True}) == max(
+        2,
+        len(config.provider.services_in_scope),
+    )
+    assert _deep_fetch_limit(config, {"service_scoped": False}) == 2
 
 
 def test_constrained_service_array_normalizes_to_canonical_map():
