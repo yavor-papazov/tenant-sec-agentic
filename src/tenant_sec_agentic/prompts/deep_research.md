@@ -21,3 +21,4 @@ items from the original assessment and add the new decisive evidence. Every
 met criterion must cite a supported claim, and the numeric score must be the
 highest met criterion. Keep commercial availability in the separate
 `licensing` observation; it must not affect the maturity score.
+Keep each evidence-item quote at or below 1,200 characters.

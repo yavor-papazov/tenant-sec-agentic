@@ -36,6 +36,7 @@ from tenant_sec_agentic.pipeline import (
     _parse_deep_research_output,
     _reconcile_skeptic,
     _retrieval_outcome,
+    _service_scope_contract,
     _validate_service_scope_result,
     current_assessment_input_hashes,
     prompt_hashes,
@@ -185,6 +186,12 @@ def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):
 
     with pytest.raises(ValidationError):
         SkepticStructured(status="assessed", reasoning="incomplete")
+    with pytest.raises(ValidationError, match="mixed result requires services"):
+        SkepticStructured(
+            status="assessed",
+            score="mixed",
+            reasoning="Per-service variation exists.",
+        )
 
 
 def test_consistency_flags_accept_level_labels():
@@ -358,6 +365,54 @@ def test_deep_research_json_repairs_minor_model_syntax_errors():
     assert parsed["questions_investigated"][0]["answer"] == "Yes"
 
 
+def test_deep_research_truncates_oversized_verbatim_quote():
+    payload = {
+        "questions_investigated": [],
+        "revised_assessment": {
+            "status": "assessed",
+            "score": 2,
+            "services": {},
+            "evidence": "Supported.",
+            "confidence": "high",
+            "sources_used": ["https://example.com/docs"],
+            "evidence_items": [
+                {
+                    "id": "ev-doc",
+                    "url": "https://example.com/docs",
+                    "title": "Documentation",
+                    "source_class": "technical",
+                    "quote": "x" * 1300,
+                    "services": [],
+                }
+            ],
+            "claims": [
+                {
+                    "id": "cl-supported",
+                    "assertion": "The capability is supported.",
+                    "result": "supported",
+                    "evidence_item_ids": ["ev-doc"],
+                    "services": [],
+                }
+            ],
+            "criteria_results": [
+                {
+                    "level": level,
+                    "met": level <= 2,
+                    "reasoning": "Evidence.",
+                    "claim_ids": ["cl-supported"],
+                }
+                for level in range(4)
+            ],
+        },
+        "unresolved": [],
+    }
+    parsed = _parse_deep_research_output(payload)
+    assert (
+        len(parsed["revised_assessment"]["evidence_items"][0]["quote"])
+        == 1200
+    )
+
+
 def test_service_scoped_release_requires_complete_mixed_result():
     services = [{"id": "a"}, {"id": "b"}]
     assert _validate_service_scope_result(
@@ -385,6 +440,17 @@ def test_service_scoped_release_requires_complete_mixed_result():
         },
         services,
     )
+
+
+def test_service_scope_contract_lists_every_required_service(tmp_path):
+    config = _config(tmp_path)
+    contract = _service_scope_contract(
+        config,
+        {"service_scoped": True},
+    )
+    for service in config.provider.services_in_scope:
+        assert service["id"] in contract
+    assert 'score MUST be "mixed"' in contract
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():
@@ -421,6 +487,11 @@ def test_evidence_url_matching_ignores_locale_and_query():
     )
     plain = "https://learn.microsoft.com/azure/update-manager/overview"
     assert _canonical_evidence_url(localized) == _canonical_evidence_url(plain)
+    legacy_gcp = "https://cloud.google.com/logging/docs/audit"
+    current_gcp = "https://docs.cloud.google.com/logging/docs/audit/"
+    assert _canonical_evidence_url(legacy_gcp) == _canonical_evidence_url(
+        current_gcp
+    )
 
 
 def test_unreferenced_service_scores_become_unknown():

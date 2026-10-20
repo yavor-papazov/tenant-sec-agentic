@@ -179,6 +179,8 @@ class SkepticStructured(BaseModel):
             raise ValueError("assessed result requires score")
         if self.status != "assessed" and self.score is not None:
             raise ValueError("non-assessed result prohibits score")
+        if self.score == "mixed" and not self.services:
+            raise ValueError("mixed result requires services")
         return self
 
 

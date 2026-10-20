@@ -18,6 +18,7 @@ from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
+from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from json_repair import repair_json
 from typing_extensions import override
@@ -56,6 +57,7 @@ from tenant_sec_agentic.web_tools import (
     STATE_DOC_SEARCH_COUNT,
     STATE_FETCHED_DOCUMENTS,
     doc_fetch_tools,
+    web_fetch,
 )
 from tenant_sec_agentic.usage import (
     BudgetExceeded,
@@ -726,6 +728,7 @@ class AssessmentPipeline(BaseAgent):
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"{_service_scope_contract(cfg, control_def)}\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(docs, default=str)}```"
         )
@@ -766,6 +769,7 @@ class AssessmentPipeline(BaseAgent):
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"{_service_scope_contract(cfg, control_def)}\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(docs, default=str)}```"
         )
@@ -854,6 +858,7 @@ class AssessmentPipeline(BaseAgent):
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"{_service_scope_contract(cfg, control_def)}\n"
             "DOCUMENTATION BUNDLE INCLUDING DEEP-RESEARCH SOURCES:\n"
             f"```json\n{json.dumps(documents, default=str)}```\n"
             "QUESTIONS INVESTIGATED:\n"
@@ -898,6 +903,7 @@ class AssessmentPipeline(BaseAgent):
         user_text = (
             f"CONTROL YAML:\n```yaml\n"
             f"{yaml.safe_dump(control_def, sort_keys=False)}```\n"
+            f"{_service_scope_contract(cfg, control_def)}\n"
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(ctx.session.state.get('doc_fetch_output') or {}, default=str)}```\n"
             f"SKEPTIC QUESTIONS:\n```json\n"
@@ -920,6 +926,7 @@ class AssessmentPipeline(BaseAgent):
             raise RuntimeError(
                 "deep research agent produced no structured output"
             )
+        _fetch_missing_deep_sources(ctx, output)
         ctx.session.state["deep_research_output"] = output
         revised = (
             output.get("revised_assessment")
@@ -938,39 +945,121 @@ class AssessmentPipeline(BaseAgent):
             ctx.session.state["deep_research_output"] = output
 
 
+def _service_scope_contract(
+    cfg: AssessmentConfig,
+    control_def: dict[str, Any],
+) -> str:
+    service_ids = [
+        str(service["id"])
+        for service in cfg.provider.services_in_scope
+    ]
+    if not control_def.get("service_scoped"):
+        return (
+            "SERVICE SCOPE CONTRACT:\n"
+            "This is offering-scoped. Return an empty services object and "
+            "never return a mixed score."
+        )
+    return (
+        "SERVICE SCOPE CONTRACT:\n"
+        "This control is service-scoped. If the top-level status is assessed, "
+        'the top-level score MUST be "mixed" and the services object MUST '
+        "contain exactly every configured service id, even when every "
+        "service has the same numeric score. Each service needs status, "
+        "score (0-3 when assessed, null otherwise), evidence, confidence, "
+        "and exact fetched sources_used. Do not return an assessed flat "
+        f"score. Required service ids:\n{json.dumps(service_ids)}"
+    )
+
+
+def _fetch_missing_deep_sources(
+    ctx: InvocationContext,
+    output: dict[str, Any],
+) -> None:
+    """Fetch every URL cited by deep research before claim enrichment."""
+    urls: list[str] = []
+    for finding in output.get("questions_investigated") or []:
+        if isinstance(finding, dict):
+            urls.extend(str(url) for url in finding.get("sources") or [])
+    revised = output.get("revised_assessment")
+    if isinstance(revised, dict):
+        urls.extend(str(url) for url in revised.get("sources_used") or [])
+        licensing = revised.get("licensing")
+        if isinstance(licensing, dict):
+            urls.extend(
+                str(url) for url in licensing.get("sources_used") or []
+            )
+        for service in (revised.get("services") or {}).values():
+            if isinstance(service, dict):
+                urls.extend(
+                    str(url) for url in service.get("sources_used") or []
+                )
+        for item in revised.get("evidence_items") or []:
+            if isinstance(item, dict) and item.get("url"):
+                urls.append(str(item["url"]))
+
+    fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+    tool_context = ToolContext(ctx)
+    for url in dict.fromkeys(url for url in urls if url):
+        _, existing = _match_fetched_document(url, fetched)
+        if isinstance(existing, dict) and existing.get("content"):
+            continue
+        result = web_fetch(url, tool_context)
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+        if result.get("status") != "ok":
+            logger.warning(
+                "deep-research source fetch failed for %s: %s",
+                url,
+                result.get("error_detail"),
+            )
+
+
 def _parse_deep_research_output(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
-        return DeepResearchStructured.model_validate(raw).model_dump(
-            mode="json"
-        )
-    if not isinstance(raw, str) or not raw.strip():
-        raise RuntimeError("deep research agent produced no final text")
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, count=1)
-        text = re.sub(r"\s*```$", "", text, count=1)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
-        raise RuntimeError("deep research agent did not return a JSON object")
-    try:
-        parsed = json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        try:
-            parsed = repair_json(
-                text[start : end + 1],
-                return_objects=True,
+        parsed = raw
+    else:
+        if not isinstance(raw, str) or not raw.strip():
+            raise RuntimeError("deep research agent produced no final text")
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, count=1)
+            text = re.sub(r"\s*```$", "", text, count=1)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise RuntimeError(
+                "deep research agent did not return a JSON object"
             )
-        except Exception as repair_exc:
-            raise RuntimeError(
-                "deep research structured output was invalid: "
-                f"{exc}; repair failed: {repair_exc}"
-            ) from repair_exc
-        if not isinstance(parsed, dict):
-            raise RuntimeError(
-                "deep research JSON repair did not produce an object"
-            ) from exc
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except json.JSONDecodeError as exc:
+            try:
+                parsed = repair_json(
+                    text[start : end + 1],
+                    return_objects=True,
+                )
+            except Exception as repair_exc:
+                raise RuntimeError(
+                    "deep research structured output was invalid: "
+                    f"{exc}; repair failed: {repair_exc}"
+                ) from repair_exc
+            if not isinstance(parsed, dict):
+                raise RuntimeError(
+                    "deep research JSON repair did not produce an object"
+                ) from exc
     try:
+        revised = (
+            parsed.get("revised_assessment")
+            if isinstance(parsed, dict)
+            else None
+        )
+        if isinstance(revised, dict):
+            for item in revised.get("evidence_items") or []:
+                if not isinstance(item, dict):
+                    continue
+                if isinstance(item.get("quote"), str):
+                    item["quote"] = item["quote"][:1200]
+                if isinstance(item.get("title"), str):
+                    item["title"] = item["title"][:160]
         return DeepResearchStructured.model_validate(parsed).model_dump(
             mode="json"
         )
@@ -1290,7 +1379,15 @@ def _match_fetched_document(
     matches = [
         (str(candidate), value)
         for candidate, value in fetched_documents.items()
-        if _canonical_evidence_url(str(candidate)) == canonical
+        if (
+            _canonical_evidence_url(str(candidate)) == canonical
+            or (
+                isinstance(value, dict)
+                and value.get("final_url")
+                and _canonical_evidence_url(str(value["final_url"]))
+                == canonical
+            )
+        )
     ]
     if len(matches) == 1:
         return matches[0]
@@ -1300,12 +1397,15 @@ def _match_fetched_document(
 def _canonical_evidence_url(url: str) -> str:
     parts = urlsplit(url.strip())
     path = re.sub(r"/+", "/", parts.path).rstrip("/")
-    if parts.netloc.casefold() == "learn.microsoft.com":
+    host = parts.netloc.casefold()
+    if host == "learn.microsoft.com":
         path = re.sub(r"^/[a-z]{2}-[a-z]{2}(?=/)", "", path)
+    if host in {"cloud.google.com", "docs.cloud.google.com"}:
+        host = "docs.cloud.google.com"
     return urlunsplit(
         (
             parts.scheme.casefold(),
-            parts.netloc.casefold(),
+            host,
             path,
             "",
             "",

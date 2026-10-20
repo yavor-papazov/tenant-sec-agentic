@@ -217,6 +217,7 @@ def web_fetch(
     text = (text or "")[:max_chars]
     result = {
         "url": url,
+        "final_url": str(r.url),
         "content": text,
         "status": "ok",
         "error_detail": None,

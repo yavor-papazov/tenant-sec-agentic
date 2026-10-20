@@ -31,7 +31,8 @@ RULES:
 8. For an assessed result, build the methodology 2.0 claim chain:
    - `evidence_items`: one entry per decisive source excerpt. Use stable ids
      `ev-...`, exact URLs, titles, source class, a verbatim quote, and affected
-     service ids. Never invent a quote.
+     service ids. Never invent a quote. Keep each quote at or below 1,200
+     characters.
    - `claims`: atomic assertions with stable `cl-...` ids, result
      supported/unsupported/contradicted, evidence item ids, and service ids.
    - `criteria_results`: exactly one result for each numeric level 0, 1, 2,
