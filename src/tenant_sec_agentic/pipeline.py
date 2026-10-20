@@ -265,6 +265,7 @@ class AssessmentPipeline(BaseAgent):
                 "consistency_output",
                 "deep_research_output",
                 "deep_research_raw",
+                "deep_research_repair_output",
                 "deep_research_revision_output",
             ):
                 st.pop(k, None)
@@ -1354,17 +1355,76 @@ class AssessmentPipeline(BaseAgent):
             "deep_research",
         )
         raw_output = ctx.session.state.get("deep_research_raw")
-        output = _parse_research_findings_output(raw_output)
+        skeptic = (
+            skeptic_override
+            or ctx.session.state.get("skeptic_output")
+            or {}
+        )
+        try:
+            output = _parse_research_findings_output(raw_output)
+            _validate_deep_question_coverage(output, skeptic)
+        except RuntimeError as exc:
+            logger.warning(
+                "repairing malformed deep research findings for %s: %s",
+                control_def.get("id"),
+                exc,
+            )
+            consume_retry(
+                ctx.session.state,
+                cfg,
+                "deep_research",
+                str(control_def.get("id") or ""),
+            )
+            repair_agent = LlmAgent(
+                name="deep_research_repair_agent",
+                model=_metered_model(ctx, cfg, "deep_research"),
+                instruction=(
+                    "Repair structured research findings without adding "
+                    "facts or doing new research. Preserve every question "
+                    "and answer. A resolved finding must list at least one "
+                    "source URL already present in the candidate; if no "
+                    "source supports it, set confidence to unresolved and "
+                    "add the question to unresolved. Return only the "
+                    "required schema."
+                ),
+                output_schema=ResearchFindingsStructured,
+                output_key="deep_research_repair_output",
+                include_contents="default",
+                generate_content_config=types.GenerateContentConfig(
+                    max_output_tokens=(
+                        cfg.limits.max_output_tokens_per_call
+                    )
+                ),
+            )
+            ctx.session.state.pop(
+                "deep_research_repair_output",
+                None,
+            )
+            repair_text = (
+                f"VALIDATION ERROR:\n{exc}\n"
+                "REQUIRED QUESTIONS:\n"
+                f"```json\n"
+                f"{json.dumps(skeptic.get('deep_research_questions') or [])}"
+                "```\n"
+                "CANDIDATE TO REPAIR:\n"
+                f"```json\n{json.dumps(raw_output, default=str)}```"
+            )
+            await _inject_user_and_drain(
+                repair_agent,
+                ctx,
+                repair_text,
+                cfg,
+                "deep_research",
+            )
+            repaired = ctx.session.state.get(
+                "deep_research_repair_output"
+            )
+            output = _parse_research_findings_output(repaired)
+            _validate_deep_question_coverage(output, skeptic)
         if not isinstance(output, dict):
             raise RuntimeError(
                 "deep research agent produced no structured output"
             )
-        _validate_deep_question_coverage(
-            output,
-            skeptic_override
-            or ctx.session.state.get("skeptic_output")
-            or {},
-        )
         _fetch_missing_deep_sources(ctx, output)
         ctx.session.state["deep_research_output"] = output
         return output
