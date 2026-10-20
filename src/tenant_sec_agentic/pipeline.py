@@ -1940,13 +1940,15 @@ def _enrich_claim_bundle(
                 f"{item.get('id') or '<missing id>'}"
             )
             continue
-        if _normalize_text(quote) not in _normalize_text(content):
+        aligned_quote = _aligned_source_quote(content, quote)
+        if aligned_quote is None:
             errors.append(
-                "evidence quote is not present in fetched source: "
+                "evidence quote is not sufficiently supported by fetched "
+                "source: "
                 f"{item.get('id') or '<missing id>'} ({matched_url})"
             )
             continue
-        quote = quote[:1200]
+        quote = aligned_quote[:1200]
         item["title"] = str(
             item.get("title") or fetched.get("title") or url
         )
@@ -2038,6 +2040,92 @@ def _canonical_evidence_url(url: str) -> str:
 
 def _normalize_text(value: str) -> str:
     return " ".join(value.split()).casefold()
+
+
+def _aligned_source_quote(content: str, quote: str) -> str | None:
+    """Return a verbatim source passage only for a tightly aligned quote."""
+    normalized_content = _normalize_text(content)
+    normalized_quote = _normalize_text(quote)
+    if normalized_quote in normalized_content:
+        return quote
+
+    stop_words = {
+        "and",
+        "are",
+        "but",
+        "for",
+        "from",
+        "has",
+        "have",
+        "into",
+        "its",
+        "that",
+        "the",
+        "their",
+        "this",
+        "was",
+        "were",
+        "which",
+        "with",
+        "you",
+        "your",
+    }
+
+    def terms(value: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9][a-z0-9_-]+", value.casefold())
+            if token not in stop_words
+        }
+
+    quote_terms = terms(quote)
+    if len(quote_terms) < 4:
+        return None
+    required = {
+        token
+        for token in quote_terms
+        if token.isdigit()
+        or token
+        in {
+            "cannot",
+            "can't",
+            "disabled",
+            "never",
+            "no",
+            "not",
+            "unsupported",
+            "without",
+        }
+    }
+    segments = [
+        segment.strip()
+        for segment in re.split(
+            r"\n+|(?<=[.!?])\s+(?=[A-Z0-9])",
+            content,
+        )
+        if segment.strip()
+    ]
+    candidates: list[str] = []
+    for start in range(len(segments)):
+        combined = ""
+        for segment in segments[start : start + 4]:
+            candidate = f"{combined} {segment}".strip()
+            if len(candidate) > 1200:
+                break
+            combined = candidate
+            candidates.append(combined)
+
+    best: str | None = None
+    best_coverage = 0.0
+    for candidate in candidates:
+        candidate_terms = terms(candidate)
+        if not required.issubset(candidate_terms):
+            continue
+        coverage = len(quote_terms & candidate_terms) / len(quote_terms)
+        if coverage > best_coverage:
+            best = candidate
+            best_coverage = coverage
+    return best if best_coverage >= 0.75 else None
 
 
 def _should_deep_research(

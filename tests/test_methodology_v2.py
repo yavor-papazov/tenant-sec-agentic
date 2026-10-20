@@ -1080,7 +1080,7 @@ def test_claim_bundle_rejects_non_verbatim_evidence_quote(tmp_path):
 
     with pytest.raises(
         RuntimeError,
-        match="evidence quote is not present in fetched source",
+        match="evidence quote is not sufficiently supported",
     ):
         _enrich_claim_bundle(
             assessor,
@@ -1091,6 +1091,33 @@ def test_claim_bundle_rejects_non_verbatim_evidence_quote(tmp_path):
                 }
             },
         )
+
+
+def test_claim_bundle_aligns_close_paraphrase_to_verbatim_source(tmp_path):
+    config = _config(tmp_path)
+    assessor = {
+        "status": "assessed",
+        "score": 2,
+        "evidence": "Supported.",
+        **_claims(),
+    }
+    assessor["evidence_items"][0]["quote"] = (
+        "API accepts a customer-managed key identifier."
+    )
+
+    enriched = _enrich_claim_bundle(
+        assessor,
+        config,
+        {
+            "https://example.com/docs/cmk": {
+                "content": "API accepts a customer key identifier."
+            }
+        },
+    )
+
+    assert enriched["evidence_items"][0]["quote"] == (
+        "API accepts a customer key identifier."
+    )
 
 
 def test_claim_bundle_rejects_supported_claim_with_only_weak_sources(
