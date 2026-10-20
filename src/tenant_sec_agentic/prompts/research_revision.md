@@ -27,3 +27,10 @@ Rules:
 6. Keep licensing separate from maturity; licensing must not change L0-L3.
 7. Follow the service-scope contract exactly, including every configured
    service.
+8. Rubric criteria are conjunctive. A service can receive L3 only when every
+   L3 clause is supported. A high-confidence finding that a material data
+   component lacks CMK, or that an L3 requirement is unavailable, prohibits
+   L3 for that service; select the highest fully supported lower level.
+   Requiring a key to be colocated with a service is not by itself a regional
+   availability gap when supported key locations exist in every service
+   region.

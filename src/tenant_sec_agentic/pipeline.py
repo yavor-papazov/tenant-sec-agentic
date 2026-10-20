@@ -421,12 +421,43 @@ class AssessmentPipeline(BaseAgent):
                     ):
                         if checkpoint_deep is not None:
                             deep_out = checkpoint_deep
+                            needs_revision = bool(
+                                deep_out.pop("_needs_revision", False)
+                            )
                             deep_out.pop("post_research_skeptic", None)
                             st["deep_research_output"] = deep_out
-                            logger.info(
-                                "resuming %s from completed deep research",
-                                cid,
-                            )
+                            if needs_revision:
+                                st["pipeline_mode"] = "deep_research"
+                                st["deep_research_max_fetch"] = (
+                                    _deep_fetch_limit(cfg, control_def)
+                                )
+                                st.pop(STATE_DEEP_FETCH_COUNT, None)
+                                _validate_deep_question_coverage(
+                                    deep_out,
+                                    skeptic_out or {},
+                                )
+                                _fetch_missing_deep_sources(ctx, deep_out)
+                                deep_out["revised_assessment"] = (
+                                    await self._run_research_revision(
+                                        ctx,
+                                        cfg,
+                                        control_def,
+                                        deep_out,
+                                    )
+                                )
+                                _sync_fetched_documents(
+                                    doc_fetch_out,
+                                    st.get(STATE_FETCHED_DOCUMENTS) or {},
+                                )
+                                logger.info(
+                                    "resuming %s from research findings",
+                                    cid,
+                                )
+                            else:
+                                logger.info(
+                                    "resuming %s from completed deep research",
+                                    cid,
+                                )
                         else:
                             used = int(
                                 st.get("deep_research_invocations", 0)
@@ -1494,6 +1525,7 @@ def _load_stage_checkpoint(
             )
         )
         and peer_context_current
+        and skeptic is not None
         and isinstance(stored_deep, dict)
         and isinstance(stored_deep.get("revised_assessment"), dict)
     ):
@@ -1537,6 +1569,31 @@ def _load_stage_checkpoint(
             )
         ):
             deep = stored_deep
+    if (
+        deep is None
+        and all(
+            hashes.get(stage)
+            and saved_hashes.get(stage) == hashes.get(stage)
+            for stage in ("skeptic", "consistency", "deep_research")
+        )
+        and peer_context_current
+        and skeptic is not None
+        and isinstance(stored_deep, dict)
+    ):
+        findings_payload = {
+            "questions_investigated": (
+                stored_deep.get("questions_investigated") or []
+            ),
+            "unresolved": stored_deep.get("unresolved") or [],
+        }
+        try:
+            findings = ResearchFindingsStructured.model_validate(
+                findings_payload
+            ).model_dump(mode="json")
+        except ValueError:
+            findings = None
+        if findings is not None:
+            deep = {**findings, "_needs_revision": True}
     return docs, assessor, skeptic, consistency, deep
 
 

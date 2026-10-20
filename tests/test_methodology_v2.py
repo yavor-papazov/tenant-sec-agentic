@@ -852,6 +852,79 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
     assert checkpoint[1]["score"] == 2
 
 
+def test_failed_artifact_reuses_research_before_revision(tmp_path):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    question = "Does the service support CMK?"
+    artifact = {
+        "status": "error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {
+            "doc_fetch": "docs",
+            "assessor": "assessor",
+            "skeptic": "skeptic",
+            "consistency": "consistency",
+            "deep_research": "research",
+            "research_revision": "old-revision",
+        },
+        "doc_fetch": {
+            "docs_fetched": [{"url": "https://example.com/docs"}],
+            "doc_quality": "adequate",
+        },
+        "assessor": {
+            "status": "assessed",
+            "score": 2,
+            "evidence": "Supported by official documentation.",
+            "sources_used": ["https://example.com/docs/cmk"],
+            **_claims(),
+        },
+        "skeptic": {
+            "status": "assessed",
+            "score": 2,
+            "reasoning": "Research needed.",
+            "deep_research_questions": [question],
+            "verdict": "flag_deep_research",
+        },
+        "consistency": {
+            "consistency_flags": [],
+            "deep_research_triggered": True,
+            "overall_consistency": "suspicious",
+        },
+        "deep_research": {
+            "questions_investigated": [
+                {
+                    "question": question,
+                    "answer": "Yes.",
+                    "sources": ["https://example.com/docs"],
+                    "confidence": "high",
+                }
+            ],
+            "unresolved": [],
+        },
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_stage_checkpoint(
+        config,
+        "enc.cmk",
+        {
+            "doc_fetch": "docs",
+            "assessor": "assessor",
+            "skeptic": "skeptic",
+            "consistency": "consistency",
+            "deep_research": "research",
+            "research_revision": "new-revision",
+        },
+    )
+    assert checkpoint is not None
+    assert checkpoint[4]["_needs_revision"] is True
+    assert checkpoint[4]["questions_investigated"][0]["answer"] == "Yes."
+
+
 def test_validation_artifact_resumes_from_raw_assessor(tmp_path):
     config = _config(tmp_path)
     config.session.resume_artifacts = True
