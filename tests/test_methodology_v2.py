@@ -951,6 +951,12 @@ def test_failed_artifact_reuses_research_before_revision(tmp_path):
                 }
             ],
             "unresolved": [],
+            "post_research_skeptic": {
+                "verdict": "flag_deep_research",
+                "deep_research_questions": [
+                    "Is CMK supported in every service region?"
+                ],
+            },
         },
     }
     (artifact_dir / "enc.cmk.yaml").write_text(
@@ -972,6 +978,9 @@ def test_failed_artifact_reuses_research_before_revision(tmp_path):
     assert checkpoint is not None
     assert checkpoint[4]["_needs_revision"] is True
     assert checkpoint[4]["questions_investigated"][0]["answer"] == "Yes."
+    assert checkpoint[4]["_pending_challenge"]["verdict"] == (
+        "flag_deep_research"
+    )
 
 
 def test_validation_artifact_resumes_from_raw_assessor(tmp_path):

@@ -424,70 +424,38 @@ class AssessmentPipeline(BaseAgent):
                             needs_revision = bool(
                                 deep_out.pop("_needs_revision", False)
                             )
+                            pending_challenge = deep_out.pop(
+                                "_pending_challenge",
+                                None,
+                            )
                             deep_out.pop("post_research_skeptic", None)
                             st["deep_research_output"] = deep_out
                             if needs_revision:
                                 st["pipeline_mode"] = "deep_research"
-                                st["deep_research_max_search"] = (
-                                    cfg.limits
-                                    .max_search_calls_per_deep_research
-                                )
-                                st["deep_research_max_fetch"] = (
-                                    _deep_fetch_limit(cfg, control_def)
-                                )
-                                st.pop(STATE_DEEP_SEARCH_COUNT, None)
-                                st.pop(STATE_DEEP_FETCH_COUNT, None)
-                                missing_questions = (
-                                    _missing_deep_questions(
+                                deep_out = (
+                                    await self
+                                    ._supplement_research_if_needed(
+                                        ctx,
+                                        cfg,
+                                        control_def,
                                         deep_out,
                                         skeptic_out or {},
                                     )
                                 )
-                                if missing_questions:
-                                    used = int(
-                                        st.get(
-                                            "deep_research_invocations",
-                                            0,
-                                        )
-                                    )
-                                    if (
-                                        used
-                                        >= cfg.limits
-                                        .max_deep_research_per_run
-                                    ):
-                                        raise RuntimeError(
-                                            "Persisted research omitted "
-                                            "required skeptic questions and "
-                                            "the per-run deep-research limit "
-                                            "was exhausted"
-                                        )
-                                    st["deep_research_invocations"] = (
-                                        used + 1
-                                    )
-                                    logger.info(
-                                        "supplementing %s research for %d "
-                                        "missing skeptic question(s)",
-                                        cid,
-                                        len(missing_questions),
-                                    )
-                                    supplement = (
+                                if isinstance(
+                                    pending_challenge,
+                                    dict,
+                                ):
+                                    deep_out = (
                                         await self
-                                        ._run_research_findings(
+                                        ._supplement_research_if_needed(
                                             ctx,
                                             cfg,
                                             control_def,
-                                            skeptic_override={
-                                                "deep_research_questions": (
-                                                    missing_questions
-                                                )
-                                            },
+                                            deep_out,
+                                            pending_challenge,
                                         )
                                     )
-                                    deep_out = _merge_research_findings(
-                                        deep_out,
-                                        supplement,
-                                    )
-                                    st["deep_research_output"] = deep_out
                                 _validate_deep_question_coverage(
                                     deep_out,
                                     skeptic_out or {},
@@ -499,6 +467,7 @@ class AssessmentPipeline(BaseAgent):
                                         cfg,
                                         control_def,
                                         deep_out,
+                                        challenge=pending_challenge,
                                     )
                                 )
                                 _sync_fetched_documents(
@@ -603,6 +572,23 @@ class AssessmentPipeline(BaseAgent):
                                         deep_out[
                                             "revision_challenge"
                                         ] = challenge
+                                        deep_out = (
+                                            await self
+                                            ._supplement_research_if_needed(
+                                                ctx,
+                                                cfg,
+                                                control_def,
+                                                deep_out,
+                                                challenge,
+                                            )
+                                        )
+                                        _sync_fetched_documents(
+                                            doc_fetch_out,
+                                            st.get(
+                                                STATE_FETCHED_DOCUMENTS
+                                            )
+                                            or {},
+                                        )
                                         revised = (
                                             await self
                                             ._run_research_revision(
@@ -1025,6 +1011,57 @@ class AssessmentPipeline(BaseAgent):
             )
         _normalize_service_array(output)
         ctx.session.state["post_research_skeptic_output"] = output
+
+    async def _supplement_research_if_needed(
+        self,
+        ctx: InvocationContext,
+        cfg: AssessmentConfig,
+        control_def: dict[str, Any],
+        existing: dict[str, Any],
+        challenge: dict[str, Any],
+    ) -> dict[str, Any]:
+        missing_questions = _missing_deep_questions(
+            existing,
+            challenge,
+        )
+        if not missing_questions:
+            return existing
+
+        st = ctx.session.state
+        used = int(st.get("deep_research_invocations", 0))
+        if used >= cfg.limits.max_deep_research_per_run:
+            raise RuntimeError(
+                "Research omitted required skeptic questions and the "
+                "per-run deep-research limit was exhausted"
+            )
+        st["deep_research_invocations"] = used + 1
+        st["pipeline_mode"] = "deep_research"
+        st["deep_research_max_search"] = (
+            cfg.limits.max_search_calls_per_deep_research
+        )
+        st["deep_research_max_fetch"] = _deep_fetch_limit(
+            cfg,
+            control_def,
+        )
+        st.pop(STATE_DEEP_SEARCH_COUNT, None)
+        st.pop(STATE_DEEP_FETCH_COUNT, None)
+        logger.info(
+            "supplementing %s research for %d missing skeptic question(s)",
+            control_def["id"],
+            len(missing_questions),
+        )
+        supplement = await self._run_research_findings(
+            ctx,
+            cfg,
+            control_def,
+            skeptic_override={
+                "deep_research_questions": missing_questions,
+            },
+        )
+        merged = _merge_research_findings(existing, supplement)
+        _validate_deep_question_coverage(merged, challenge)
+        st["deep_research_output"] = merged
+        return merged
 
     async def _run_deep_research(
         self,
@@ -1688,8 +1725,19 @@ def _load_stage_checkpoint(
 
     deep: dict[str, Any] | None = None
     stored_deep = artifact.get("deep_research")
+    pending_challenge: dict[str, Any] | None = None
+    if isinstance(stored_deep, dict):
+        stored_post_research = stored_deep.get(
+            "post_research_skeptic"
+        )
+        if (
+            isinstance(stored_post_research, dict)
+            and stored_post_research.get("verdict") != "confirm"
+        ):
+            pending_challenge = stored_post_research
     if (
-        all(
+        pending_challenge is None
+        and all(
             hashes.get(stage)
             and saved_hashes.get(stage) == hashes.get(stage)
             for stage in (
@@ -1769,6 +1817,8 @@ def _load_stage_checkpoint(
             findings = None
         if findings is not None:
             deep = {**findings, "_needs_revision": True}
+            if pending_challenge is not None:
+                deep["_pending_challenge"] = pending_challenge
     return docs, assessor, skeptic, consistency, deep
 
 
