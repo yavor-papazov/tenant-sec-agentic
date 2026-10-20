@@ -33,6 +33,7 @@ from tenant_sec_agentic.pipeline import (
     _load_stage_checkpoint,
     _mock_assessor,
     _normalize_fetched_documents,
+    _normalize_research_wrapper,
     _normalize_service_array,
     _normalize_service_evidence,
     _parse_deep_research_output,
@@ -525,6 +526,12 @@ def test_constrained_service_array_normalizes_to_canonical_map():
     assert set(payload["services"]) == {"cloud-storage"}
     assert payload["services"]["cloud-storage"]["score"] == 3
     assert "service_id" not in payload["services"]["cloud-storage"]
+
+
+def test_research_wrapper_normalizes_mixed_status():
+    replacement = {"status": "mixed", "score": None}
+    _normalize_research_wrapper(replacement)
+    assert replacement == {"status": "assessed", "score": "mixed"}
 
 
 def test_fetched_document_urls_are_repaired_and_deduplicated():

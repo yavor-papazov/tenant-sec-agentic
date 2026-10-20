@@ -1124,6 +1124,7 @@ def _parse_deep_research_output(
             else None
         )
         if isinstance(revised, dict):
+            _normalize_research_wrapper(revised)
             if not str(revised.get("evidence") or "").strip():
                 revised["evidence"] = (
                     "See the per-service findings and source-backed claim "
@@ -1160,6 +1161,13 @@ def _parse_deep_research_output(
         raise RuntimeError(
             f"deep research structured output was invalid: {exc}"
         ) from exc
+
+
+def _normalize_research_wrapper(revised: dict[str, Any]) -> None:
+    if revised.get("status") == "mixed":
+        revised["status"] = "assessed"
+        if revised.get("score") is None:
+            revised["score"] = "mixed"
 
 
 def _assessment_verdicts_match(
