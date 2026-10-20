@@ -869,21 +869,53 @@ class AssessmentPipeline(BaseAgent):
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(docs, default=str)}```"
         )
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "assessor")
-        output = ctx.session.state.get("assessor_output")
-        if not isinstance(output, dict) or not output.get("status"):
-            raise RuntimeError(
-                "assessor agent produced no structured output"
-            )
-        _normalize_service_array(output)
-        ctx.session.state["assessor_output"] = output
-        if isinstance(output, dict) and output.get("status") == "assessed":
-            fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
-            ctx.session.state["assessor_output"] = _enrich_claim_bundle(
-                output,
+        fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+        correction = ""
+        for attempt in range(cfg.limits.max_retries_per_call + 1):
+            ctx.session.state.pop("assessor_output", None)
+            await _inject_user_and_drain(
+                agent,
+                ctx,
+                user_text + correction,
                 cfg,
-                fetched,
+                "assessor",
             )
+            output = ctx.session.state.get("assessor_output")
+            if not isinstance(output, dict) or not output.get("status"):
+                raise RuntimeError(
+                    "assessor agent produced no structured output"
+                )
+            _normalize_service_array(output)
+            try:
+                if output.get("status") == "assessed":
+                    output = _enrich_claim_bundle(
+                        output,
+                        cfg,
+                        fetched,
+                    )
+            except RuntimeError as exc:
+                if (
+                    "evidence quote" not in str(exc)
+                    or attempt >= cfg.limits.max_retries_per_call
+                ):
+                    raise
+                logger.warning(
+                    "assessor evidence retry %d after error: %s",
+                    attempt + 1,
+                    exc,
+                )
+                correction = (
+                    "\nPREVIOUS ASSESSMENT REJECTED:\n"
+                    f"{exc}\n"
+                    "Return a complete corrected replacement. Copy every "
+                    "evidence quote verbatim from the documentation bundle "
+                    "and remove any claim that the fetched text does not "
+                    "support."
+                )
+                continue
+            ctx.session.state["assessor_output"] = output
+            return
+        raise RuntimeError("assessor evidence retries exhausted")
 
     async def _run_skeptic(
         self,
