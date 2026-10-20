@@ -2110,9 +2110,16 @@ def _load_stage_checkpoint(
     if not isinstance(docs, dict) or not isinstance(assessor, dict):
         return None
     retrieval_outcome = _retrieval_outcome(docs)
+    retrieval_summary_malformed = (
+        "DocFetchStructured"
+        in str(artifact.get("error_detail") or "")
+        or "doc_fetch agent produced no structured output"
+        in str(artifact.get("error_detail") or "")
+    )
     if (
         retrieval_outcome in {"failed", "exhausted"}
         and assessor.get("status") == "not_assessed"
+        and not retrieval_summary_malformed
     ):
         return deepcopy(docs), deepcopy(assessor), None, None, None
     if not docs.get("docs_fetched") or not assessor.get("status"):

@@ -957,6 +957,22 @@ def test_retrieval_exhaustion_resumes_as_not_assessed(tmp_path):
     assert checkpoint[1] == assessor
     assert checkpoint[2:] == (None, None, None)
 
+    artifact["error_detail"] = (
+        "1 validation error for DocFetchStructured"
+    )
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    assert (
+        _load_stage_checkpoint(
+            config,
+            "enc.cmk",
+            {"doc_fetch": "docs", "assessor": "assessor"},
+        )
+        is None
+    )
+
 
 def test_failed_assessor_reuses_fetched_documents(tmp_path):
     config = _config(tmp_path)
