@@ -981,8 +981,50 @@ class AssessmentPipeline(BaseAgent):
             ),
         )
         user_text = _user_block_doc_fetch(cfg, control_def)
-        await _inject_user_and_drain(agent, ctx, user_text, cfg, "doc_fetch")
-        output = ctx.session.state.get("doc_fetch_output")
+        try:
+            await _inject_user_and_drain(
+                agent,
+                ctx,
+                user_text,
+                cfg,
+                "doc_fetch",
+            )
+            output = ctx.session.state.get("doc_fetch_output")
+        except Exception as exc:
+            if isinstance(exc, BudgetExceeded):
+                raise
+            fetched_after_failure = (
+                ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
+            )
+            recovered_documents = [
+                {
+                    "url": str(url),
+                    "title": str(
+                        (value or {}).get("title") or url
+                    )[:120],
+                    "relevance": "high",
+                    "content": str(
+                        (value or {}).get("content") or ""
+                    ),
+                }
+                for url, value in fetched_after_failure.items()
+                if isinstance(value, dict) and value.get("content")
+            ][: cfg.limits.max_fetch_calls_per_doc_fetch]
+            if not recovered_documents:
+                raise
+            logger.warning(
+                "doc-fetch summary failed for %s; recovering %d "
+                "successfully fetched documents: %s",
+                control_def.get("id"),
+                len(recovered_documents),
+                exc,
+            )
+            output = {
+                "docs_fetched": recovered_documents,
+                "services_with_docs": [],
+                "services_without_docs": [],
+                "doc_quality": "thin",
+            }
         if not isinstance(output, dict):
             raise RuntimeError("doc_fetch agent produced no structured output")
         fetched = ctx.session.state.get(STATE_FETCHED_DOCUMENTS) or {}
