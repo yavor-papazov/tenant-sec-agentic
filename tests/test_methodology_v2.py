@@ -31,6 +31,8 @@ from tenant_sec_agentic.pipeline import (
     _enrich_claim_bundle,
     _final_recommendation,
     _load_stage_checkpoint,
+    _merge_research_findings,
+    _missing_deep_questions,
     _mock_assessor,
     _normalize_fetched_documents,
     _normalize_research_wrapper,
@@ -397,6 +399,53 @@ def test_deep_research_must_answer_every_skeptic_question():
         },
         {"deep_research_questions": [question]},
     )
+
+
+def test_research_checkpoint_can_be_supplemented_for_missing_questions():
+    first = "Does Secret Manager support CMEK?"
+    second = "Is CMEK regionally available?"
+    existing = {
+        "questions_investigated": [
+            {
+                "question": first,
+                "answer": "Yes.",
+                "sources": ["https://example.com/secret-manager"],
+                "confidence": "high",
+            }
+        ],
+        "unresolved": ["Confirm regional availability."],
+        "revised_assessment": {"status": "assessed"},
+        "post_research_skeptic": {"verdict": "flag_deep_research"},
+        "_needs_revision": True,
+    }
+    skeptic = {"deep_research_questions": [first, second]}
+
+    assert _missing_deep_questions(existing, skeptic) == [second]
+
+    merged = _merge_research_findings(
+        existing,
+        {
+            "questions_investigated": [
+                {
+                    "question": second,
+                    "answer": "Evidence remains incomplete.",
+                    "sources": ["https://example.com/regions"],
+                    "confidence": "unresolved",
+                }
+            ],
+            "unresolved": [
+                "Confirm regional availability.",
+                "Provider documentation does not enumerate every region.",
+            ],
+        },
+    )
+
+    _validate_deep_question_coverage(merged, skeptic)
+    assert len(merged["questions_investigated"]) == 2
+    assert len(merged["unresolved"]) == 2
+    assert "revised_assessment" not in merged
+    assert "post_research_skeptic" not in merged
+    assert "_needs_revision" not in merged
 
 
 def test_deep_research_json_repairs_minor_model_syntax_errors():

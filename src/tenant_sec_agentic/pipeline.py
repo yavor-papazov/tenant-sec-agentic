@@ -428,10 +428,66 @@ class AssessmentPipeline(BaseAgent):
                             st["deep_research_output"] = deep_out
                             if needs_revision:
                                 st["pipeline_mode"] = "deep_research"
+                                st["deep_research_max_search"] = (
+                                    cfg.limits
+                                    .max_search_calls_per_deep_research
+                                )
                                 st["deep_research_max_fetch"] = (
                                     _deep_fetch_limit(cfg, control_def)
                                 )
+                                st.pop(STATE_DEEP_SEARCH_COUNT, None)
                                 st.pop(STATE_DEEP_FETCH_COUNT, None)
+                                missing_questions = (
+                                    _missing_deep_questions(
+                                        deep_out,
+                                        skeptic_out or {},
+                                    )
+                                )
+                                if missing_questions:
+                                    used = int(
+                                        st.get(
+                                            "deep_research_invocations",
+                                            0,
+                                        )
+                                    )
+                                    if (
+                                        used
+                                        >= cfg.limits
+                                        .max_deep_research_per_run
+                                    ):
+                                        raise RuntimeError(
+                                            "Persisted research omitted "
+                                            "required skeptic questions and "
+                                            "the per-run deep-research limit "
+                                            "was exhausted"
+                                        )
+                                    st["deep_research_invocations"] = (
+                                        used + 1
+                                    )
+                                    logger.info(
+                                        "supplementing %s research for %d "
+                                        "missing skeptic question(s)",
+                                        cid,
+                                        len(missing_questions),
+                                    )
+                                    supplement = (
+                                        await self
+                                        ._run_research_findings(
+                                            ctx,
+                                            cfg,
+                                            control_def,
+                                            skeptic_override={
+                                                "deep_research_questions": (
+                                                    missing_questions
+                                                )
+                                            },
+                                        )
+                                    )
+                                    deep_out = _merge_research_findings(
+                                        deep_out,
+                                        supplement,
+                                    )
+                                    st["deep_research_output"] = deep_out
                                 _validate_deep_question_coverage(
                                     deep_out,
                                     skeptic_out or {},
@@ -926,6 +982,28 @@ class AssessmentPipeline(BaseAgent):
         cfg: AssessmentConfig,
         control_def: dict[str, Any],
     ) -> None:
+        output = await self._run_research_findings(
+            ctx,
+            cfg,
+            control_def,
+        )
+        revised = await self._run_research_revision(
+            ctx,
+            cfg,
+            control_def,
+            output,
+        )
+        output["revised_assessment"] = revised
+        ctx.session.state["deep_research_output"] = output
+
+    async def _run_research_findings(
+        self,
+        ctx: InvocationContext,
+        cfg: AssessmentConfig,
+        control_def: dict[str, Any],
+        *,
+        skeptic_override: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         dr_prompt = _load_prompt("deep_research.md")
         model = _metered_model(ctx, cfg, "deep_research")
         agent = LlmAgent(
@@ -946,12 +1024,13 @@ class AssessmentPipeline(BaseAgent):
             f"DOCUMENTATION BUNDLE:\n```json\n"
             f"{json.dumps(ctx.session.state.get('doc_fetch_output') or {}, default=str)}```\n"
             f"SKEPTIC QUESTIONS:\n```json\n"
-            f"{json.dumps(ctx.session.state.get('skeptic_output') or {}, default=str)}```\n"
+            f"{json.dumps(skeptic_override or ctx.session.state.get('skeptic_output') or {}, default=str)}```\n"
             f"CONSISTENCY FLAGS:\n```json\n"
             f"{json.dumps(ctx.session.state.get('consistency_output') or {}, default=str)}```\n"
             "OUTPUT JSON SCHEMA:\n```json\n"
             f"{json.dumps(ResearchFindingsStructured.model_json_schema(), default=str)}```"
         )
+        ctx.session.state.pop("deep_research_raw", None)
         await _inject_user_and_drain(
             agent,
             ctx,
@@ -967,17 +1046,12 @@ class AssessmentPipeline(BaseAgent):
             )
         _validate_deep_question_coverage(
             output,
-            ctx.session.state.get("skeptic_output") or {},
+            skeptic_override
+            or ctx.session.state.get("skeptic_output")
+            or {},
         )
         _fetch_missing_deep_sources(ctx, output)
-        revised = await self._run_research_revision(
-            ctx,
-            cfg,
-            control_def,
-            output,
-        )
-        output["revised_assessment"] = revised
-        ctx.session.state["deep_research_output"] = output
+        return output
 
     async def _run_research_revision(
         self,
@@ -1144,23 +1218,69 @@ def _validate_deep_question_coverage(
     output: dict[str, Any],
     skeptic: dict[str, Any],
 ) -> None:
-    expected = {
-        _normalize_text(str(question))
+    missing = _missing_deep_questions(output, skeptic)
+    if missing:
+        raise RuntimeError(
+            "deep research omitted skeptic questions: "
+            + " | ".join(_normalize_text(question) for question in missing)
+        )
+
+
+def _missing_deep_questions(
+    output: dict[str, Any],
+    skeptic: dict[str, Any],
+) -> list[str]:
+    expected = [
+        str(question).strip()
         for question in skeptic.get("deep_research_questions") or []
         if str(question).strip()
-    }
-    if not expected:
-        return
+    ]
     investigated = {
         _normalize_text(str(finding.get("question") or ""))
         for finding in output.get("questions_investigated") or []
         if isinstance(finding, dict)
     }
-    missing = sorted(expected - investigated)
-    if missing:
-        raise RuntimeError(
-            "deep research omitted skeptic questions: " + " | ".join(missing)
-        )
+    return [
+        question
+        for question in expected
+        if _normalize_text(question) not in investigated
+    ]
+
+
+def _merge_research_findings(
+    existing: dict[str, Any],
+    supplement: dict[str, Any],
+) -> dict[str, Any]:
+    merged = deepcopy(existing)
+    merged.pop("_needs_revision", None)
+    merged.pop("revised_assessment", None)
+    merged.pop("post_research_skeptic", None)
+
+    findings: dict[str, dict[str, Any]] = {}
+    for finding in [
+        *(existing.get("questions_investigated") or []),
+        *(supplement.get("questions_investigated") or []),
+    ]:
+        if not isinstance(finding, dict):
+            continue
+        question = _normalize_text(str(finding.get("question") or ""))
+        if question:
+            findings[question] = finding
+    merged["questions_investigated"] = list(findings.values())
+
+    unresolved: list[str] = []
+    seen_unresolved: set[str] = set()
+    for item in [
+        *(existing.get("unresolved") or []),
+        *(supplement.get("unresolved") or []),
+    ]:
+        text = str(item).strip()
+        normalized = _normalize_text(text)
+        if text and normalized not in seen_unresolved:
+            seen_unresolved.add(normalized)
+            unresolved.append(text)
+    merged["unresolved"] = unresolved
+    return merged
 
 
 def _parse_research_findings_output(raw: Any) -> dict[str, Any]:
