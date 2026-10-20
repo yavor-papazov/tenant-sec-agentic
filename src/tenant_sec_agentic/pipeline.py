@@ -325,6 +325,16 @@ class AssessmentPipeline(BaseAgent):
                             or _retrieval_outcome(doc_fetch_out)
                         )
                         doc_fetch_out["retrieval_outcome"] = retrieval_outcome
+                        if retrieval_outcome in {
+                            "failed",
+                            "exhausted",
+                        }:
+                            warning_detail = (
+                                "Evidence retrieval failed"
+                                if retrieval_outcome == "failed"
+                                else "Evidence retrieval exhausted without "
+                                "fetching a document"
+                            )
                         st["doc_fetch_output"] = doc_fetch_out
                         st["assessor_output"] = assessor_out
                         st[STATE_FETCHED_DOCUMENTS] = (
@@ -381,7 +391,7 @@ class AssessmentPipeline(BaseAgent):
                                 retrieval_outcome
                             )
                             st["assessor_output"] = assessor_out
-                            err_detail = (
+                            warning_detail = (
                                 "Evidence retrieval failed"
                                 if retrieval_outcome == "failed"
                                 else "Evidence retrieval exhausted without "
@@ -1983,6 +1993,12 @@ def _load_stage_checkpoint(
     assessor = artifact.get("assessor_raw") or artifact.get("assessor")
     if not isinstance(docs, dict) or not isinstance(assessor, dict):
         return None
+    retrieval_outcome = _retrieval_outcome(docs)
+    if (
+        retrieval_outcome in {"failed", "exhausted"}
+        and assessor.get("status") == "not_assessed"
+    ):
+        return deepcopy(docs), deepcopy(assessor), None, None, None
     if not docs.get("docs_fetched") or not assessor.get("status"):
         return None
     if assessor.get("status") == "assessed" and (

@@ -916,6 +916,47 @@ def test_failed_artifact_resumes_completed_core_stages(tmp_path):
     assert checkpoint[1]["score"] == 2
 
 
+def test_retrieval_exhaustion_resumes_as_not_assessed(tmp_path):
+    config = _config(tmp_path)
+    config.session.resume_artifacts = True
+    artifact_dir = config.paths.assessments_dir / config.provider.slug
+    artifact_dir.mkdir(parents=True)
+    assessor = {
+        "status": "not_assessed",
+        "score": None,
+        "evidence": "Retrieval returned no documents.",
+        "confidence": "low",
+        "sources_used": [],
+    }
+    artifact = {
+        "status": "error",
+        "assessment_id": config.provider.assessment_id,
+        "prompt_hashes": {
+            "doc_fetch": "docs",
+            "assessor": "assessor",
+        },
+        "doc_fetch": {
+            "retrieval_outcome": "exhausted",
+            "docs_fetched": [],
+            "doc_quality": "absent",
+        },
+        "assessor": assessor,
+    }
+    (artifact_dir / "enc.cmk.yaml").write_text(
+        yaml.safe_dump(artifact),
+        encoding="utf-8",
+    )
+    checkpoint = _load_stage_checkpoint(
+        config,
+        "enc.cmk",
+        {"doc_fetch": "docs", "assessor": "assessor"},
+    )
+    assert checkpoint is not None
+    assert checkpoint[0]["retrieval_outcome"] == "exhausted"
+    assert checkpoint[1] == assessor
+    assert checkpoint[2:] == (None, None, None)
+
+
 def test_failed_assessor_reuses_fetched_documents(tmp_path):
     config = _config(tmp_path)
     config.session.resume_artifacts = True
