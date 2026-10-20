@@ -595,10 +595,59 @@ class AssessmentPipeline(BaseAgent):
                                         "post_research_skeptic"
                                     ] = challenge
                                     if challenge.get("verdict") != "confirm":
-                                        err_detail = (
-                                            "Post-research independent "
-                                            "challenge remains unresolved"
+                                        logger.info(
+                                            "revising %s once against the "
+                                            "post-research challenge",
+                                            cid,
                                         )
+                                        deep_out[
+                                            "revision_challenge"
+                                        ] = challenge
+                                        revised = (
+                                            await self
+                                            ._run_research_revision(
+                                                ctx,
+                                                cfg,
+                                                control_def,
+                                                deep_out,
+                                                challenge=challenge,
+                                            )
+                                        )
+                                        deep_out[
+                                            "revised_assessment"
+                                        ] = revised
+                                        await (
+                                            self
+                                            ._run_post_research_skeptic(
+                                                ctx,
+                                                cfg,
+                                                control_def,
+                                                deep_out,
+                                            )
+                                        )
+                                        independent = (
+                                            st.get(
+                                                "post_research_skeptic_output"
+                                            )
+                                            or {}
+                                        )
+                                        challenge = _reconcile_skeptic(
+                                            revised,
+                                            independent,
+                                        )
+                                        deep_out[
+                                            "post_research_skeptic"
+                                        ] = challenge
+                                        if (
+                                            challenge.get("verdict")
+                                            != "confirm"
+                                        ):
+                                            err_detail = (
+                                                "Post-research independent "
+                                                "challenge remains "
+                                                "unresolved after one "
+                                                "adjudication pass"
+                                            )
                                 except Exception as exc:
                                     logger.exception(
                                         "post-research challenge failed for "
@@ -961,6 +1010,7 @@ class AssessmentPipeline(BaseAgent):
             f"```json\n"
             f"{json.dumps(deep_output.get('unresolved') or [], default=str)}```"
         )
+        ctx.session.state.pop("post_research_skeptic_output", None)
         await _inject_user_and_drain(
             agent,
             ctx,
@@ -1059,6 +1109,8 @@ class AssessmentPipeline(BaseAgent):
         cfg: AssessmentConfig,
         control_def: dict[str, Any],
         findings: dict[str, Any],
+        *,
+        challenge: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         prompt = _load_prompt("research_revision.md")
         model = _metered_model(ctx, cfg, "research_revision")
@@ -1091,9 +1143,12 @@ class AssessmentPipeline(BaseAgent):
             f"```json\n{json.dumps(ctx.session.state.get('assessor_output') or {}, default=str)}```\n"
             "RESEARCH FINDINGS:\n"
             f"```json\n{json.dumps(findings, default=str)}```\n"
+            "INDEPENDENT CHALLENGE TO RECONCILE:\n"
+            f"```json\n{json.dumps(challenge or {}, default=str)}```\n"
             "FETCHED DOCUMENTATION:\n"
             f"```json\n{json.dumps(documents, default=str)}```"
         )
+        ctx.session.state.pop("deep_research_revision_output", None)
         await _inject_user_and_drain(
             agent,
             ctx,

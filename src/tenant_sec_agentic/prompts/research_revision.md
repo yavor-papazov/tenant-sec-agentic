@@ -5,6 +5,7 @@ Inputs in the user message:
 - the original source-backed assessment;
 - independently gathered research findings;
 - the fetched documents behind those findings;
+- an optional independent challenge from a prior revision pass;
 - the exact service-scope output contract.
 
 Return one complete replacement assessment matching the supplied structured
@@ -34,3 +35,9 @@ Rules:
    Requiring a key to be colocated with a service is not by itself a regional
    availability gap when supported key locations exist in every service
    region.
+9. Audit the fetched documentation for explicit exclusions, limitations, and
+   unsupported components before assigning each service's score. Do not ignore
+   a limiting statement merely because the research summary omitted it.
+10. If an independent challenge is supplied, reconcile every disputed service
+    against the fetched evidence. Do not accept the challenge blindly, but do
+    not preserve the prior score when its stated limitation is source-backed.
