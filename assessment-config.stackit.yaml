@@ -1,0 +1,87 @@
+provider:
+  slug: stackit
+  display_name: STACKIT
+  docs_base_url: https://docs.stackit.cloud
+  assessment_id: stackit/public/eu01/standard
+  offering:
+    id: public
+    name: STACKIT Cloud
+    partition: commercial
+    regions: [eu01]
+    edition: standard
+    cohort: eu-public
+  services_in_scope:
+    - { id: compute-engine, name: Compute Engine, category: compute.vm, regions: [eu01], edition: standard }
+    - { id: kubernetes-engine, name: Kubernetes Engine, category: compute.containers, regions: [eu01], edition: standard }
+    - { id: object-storage, name: Object Storage, category: storage.object, regions: [eu01], edition: standard }
+    - { id: block-storage, name: Block Storage, category: storage.block, regions: [eu01], edition: standard }
+    - { id: postgresql-flex, name: PostgreSQL Flex, category: database.relational, regions: [eu01], edition: standard }
+    - { id: mongodb-flex, name: MongoDB Flex, category: database.nosql, regions: [eu01], edition: standard }
+    - { id: redis, name: Redis, category: database.cache, regions: [eu01], edition: standard }
+    - { id: network, name: Network, category: network.vpc, regions: [eu01], edition: standard }
+    - { id: application-load-balancer, name: Application Load Balancer, category: network.loadbalancer, regions: [eu01], edition: standard }
+    - { id: dns, name: DNS, category: network.dns, regions: [eu01], edition: standard }
+    - { id: kms, name: Key Management Service, category: security.kms, regions: [eu01], edition: standard }
+    - { id: secrets-manager, name: Secrets Manager, category: security.secrets, regions: [eu01], edition: standard }
+    - { id: iam, name: Identity and Access Management, category: identity.iam, regions: [eu01], edition: standard }
+
+controls:
+  scope: all
+
+evidence_seeds:
+  data.residency-guarantees:
+    - https://docs.stackit.cloud/platform/regions/
+    - https://docs.stackit.cloud/products/storage/object-storage/basics/architecture/
+  enc.cmk:
+    - https://docs.stackit.cloud/products/security/kms/
+    - https://docs.stackit.cloud/products/security/secrets-manager/how-tos/kms-encryption-in-the-secrets-manager/
+  enc.external-key-management:
+    - https://docs.stackit.cloud/products/security/kms/
+  log.control-plane-audit:
+    - https://docs.stackit.cloud/platform/audit-log/
+    - https://docs.stackit.cloud/products/logging-and-monitoring/telemetry-router/basics/dataformats/
+
+models:
+  doc_fetch: vertex_ai/gemini-2.5-flash
+  assessor: vertex_ai/gemini-2.5-flash
+  skeptic: vertex_ai/gemini-2.5-flash
+  consistency: vertex_ai/gemini-2.5-flash
+  deep_research: vertex_ai/gemini-2.5-flash
+
+vertex_traffic_class: standard
+
+pricing:
+  vertex_ai/gemini-2.5-flash:
+    input_per_million: 0.54
+    output_per_million: 4.50
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 12288
+  model_timeout_seconds: 300
+  max_model_turns_per_agent: 12
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.stackit.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false

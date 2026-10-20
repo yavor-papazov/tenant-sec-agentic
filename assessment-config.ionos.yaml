@@ -1,0 +1,84 @@
+provider:
+  slug: ionos
+  display_name: IONOS Cloud
+  docs_base_url: https://docs.ionos.com/cloud
+  assessment_id: ionos/public/de-fra-1/standard
+  offering:
+    id: public
+    name: IONOS Cloud
+    partition: commercial
+    regions: [de/fra/1]
+    edition: standard
+    cohort: eu-public
+  services_in_scope:
+    - { id: vcpu-servers, name: vCPU Servers, category: compute.vm, regions: [de/fra/1], edition: standard }
+    - { id: managed-kubernetes, name: Managed Kubernetes, category: compute.containers, regions: [de/fra/1], edition: standard }
+    - { id: object-storage, name: IONOS Cloud Object Storage, category: storage.object, regions: [de/fra/1], edition: standard }
+    - { id: block-storage, name: Block Storage, category: storage.block, regions: [de/fra/1], edition: standard }
+    - { id: network-file-storage, name: Network File Storage, category: storage.file, regions: [de/fra/1], edition: standard }
+    - { id: postgresql, name: Managed PostgreSQL, category: database.relational, regions: [de/fra/1], edition: standard }
+    - { id: mongodb, name: Managed MongoDB, category: database.nosql, regions: [de/fra/1], edition: standard }
+    - { id: virtual-data-center, name: Virtual Data Center, category: network.vpc, regions: [de/fra/1], edition: standard }
+    - { id: application-load-balancer, name: Application Load Balancer, category: network.loadbalancer, regions: [de/fra/1], edition: standard }
+    - { id: cloud-dns, name: Cloud DNS, category: network.dns, regions: [de/fra/1], edition: standard }
+    - { id: iam, name: Identity and Access Management, category: identity.iam, regions: [de/fra/1], edition: standard }
+
+controls:
+  scope: all
+
+evidence_seeds:
+  data.residency-guarantees:
+    - https://docs.ionos.com/cloud/support/general-information/service-catalog
+    - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/concepts/buckets
+  enc.cmk:
+    - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/concepts/s3-api-compatibility
+    - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/object-storage-faqs
+  enc.external-key-management:
+    - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/concepts/s3-api-compatibility
+  iam.external-idp-federation:
+    - https://docs.ionos.com/cloud/management/identity-access-management/iam-federation
+
+models:
+  doc_fetch: vertex_ai/gemini-2.5-flash
+  assessor: vertex_ai/gemini-2.5-flash
+  skeptic: vertex_ai/gemini-2.5-flash
+  consistency: vertex_ai/gemini-2.5-flash
+  deep_research: vertex_ai/gemini-2.5-flash
+
+vertex_traffic_class: standard
+
+pricing:
+  vertex_ai/gemini-2.5-flash:
+    input_per_million: 0.54
+    output_per_million: 4.50
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 12288
+  model_timeout_seconds: 300
+  max_model_turns_per_agent: 12
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.ionos.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false

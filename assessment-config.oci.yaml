@@ -1,0 +1,96 @@
+provider:
+  slug: oci
+  display_name: Oracle Cloud Infrastructure
+  docs_base_url: https://docs.oracle.com/en-us/iaas
+  assessment_id: oci/public/eu-frankfurt-1/standard
+  offering:
+    id: public
+    name: Oracle Cloud Infrastructure
+    partition: commercial
+    regions: [eu-frankfurt-1]
+    edition: standard
+    cohort: hyperscaler
+  services_in_scope:
+    - { id: compute, name: Compute, category: compute.vm, regions: [eu-frankfurt-1], edition: standard }
+    - { id: oke, name: Container Engine for Kubernetes, category: compute.containers, regions: [eu-frankfurt-1], edition: standard }
+    - { id: functions, name: Functions, category: compute.serverless, regions: [eu-frankfurt-1], edition: standard }
+    - { id: object-storage, name: Object Storage, category: storage.object, regions: [eu-frankfurt-1], edition: standard }
+    - { id: block-volume, name: Block Volume, category: storage.block, regions: [eu-frankfurt-1], edition: standard }
+    - { id: file-storage, name: File Storage, category: storage.file, regions: [eu-frankfurt-1], edition: standard }
+    - { id: base-database, name: Base Database Service, category: database.relational, regions: [eu-frankfurt-1], edition: standard }
+    - { id: nosql-database, name: NoSQL Database, category: database.nosql, regions: [eu-frankfurt-1], edition: standard }
+    - { id: autonomous-data-warehouse, name: Autonomous Data Warehouse, category: data.warehouse, regions: [eu-frankfurt-1], edition: standard }
+    - { id: vcn, name: Virtual Cloud Network, category: network.vpc, regions: [eu-frankfurt-1], edition: standard }
+    - { id: load-balancer, name: Load Balancer, category: network.loadbalancer, regions: [eu-frankfurt-1], edition: standard }
+    - { id: dns, name: DNS, category: network.dns, regions: [eu-frankfurt-1], edition: standard }
+    - { id: vault, name: Vault, category: security.kms, regions: [eu-frankfurt-1], edition: standard }
+    - { id: secrets, name: Secrets, category: security.secrets, regions: [eu-frankfurt-1], edition: standard }
+    - { id: waf, name: Web Application Firewall, category: security.waf, regions: [eu-frankfurt-1], edition: standard }
+    - { id: iam, name: Identity and Access Management, category: identity.iam, regions: [eu-frankfurt-1], edition: standard }
+
+controls:
+  scope: all
+
+evidence_seeds:
+  iam.external-idp-federation:
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/Tasks/federatingADFS.htm
+  gov.preventive-policy:
+    - https://docs.oracle.com/en-us/iaas/Content/Security/Concepts/security_zones.htm
+    - https://docs.oracle.com/en-us/iaas/Content/Security/Concepts/security_features.htm
+  enc.encryption-at-rest-default:
+    - https://docs.oracle.com/en-us/iaas/Content/Security/Concepts/security_features.htm
+  enc.cmk:
+    - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Concepts/keyoverview.htm
+  enc.external-key-management:
+    - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Concepts/keyoverview.htm
+  log.immutability:
+    - https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usingobjectversioning.htm
+  log.control-plane-audit:
+    - https://docs.oracle.com/en-us/iaas/Content/Audit/Concepts/auditoverview.htm
+  data.residency-guarantees:
+    - https://docs.oracle.com/en-us/iaas/Content/General/Concepts/regions.htm
+
+models:
+  doc_fetch: vertex_ai/gemini-2.5-flash
+  assessor: vertex_ai/gemini-2.5-flash
+  skeptic: vertex_ai/gemini-2.5-flash
+  consistency: vertex_ai/gemini-2.5-flash
+  deep_research: vertex_ai/gemini-2.5-flash
+
+vertex_traffic_class: standard
+
+pricing:
+  vertex_ai/gemini-2.5-flash:
+    input_per_million: 0.54
+    output_per_million: 4.50
+
+limits:
+  max_model_calls_per_run: 50
+  max_input_tokens_per_run: 750000
+  max_output_tokens_per_run: 150000
+  max_output_tokens_per_call: 12288
+  model_timeout_seconds: 300
+  max_model_turns_per_agent: 12
+  max_retries_per_run: 10
+  max_retries_per_call: 2
+  max_search_calls_per_run: 30
+  max_fetch_calls_per_run: 30
+  max_search_calls_per_doc_fetch: 2
+  max_fetch_calls_per_doc_fetch: 3
+  max_deep_research_per_run: 5
+  max_search_calls_per_deep_research: 3
+  max_fetch_calls_per_deep_research: 2
+  max_projected_cost_usd: 4.0
+  max_parallel_assessments: 1
+
+paths:
+  repo_root: ../tenant-sec
+  assessments_dir: ./assessments
+  reports_dir: ./reports
+
+session:
+  database_path: ./pipeline_sessions.oci.db
+  resume_existing: false
+  resume_artifacts: true
+
+mock_mode: false

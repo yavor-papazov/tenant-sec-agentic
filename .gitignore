@@ -10,5 +10,6 @@ build/
 assessments/
 reports/
 pipeline_sessions.db
+pipeline_sessions.*.db
 assessment-config.yaml
 .env
