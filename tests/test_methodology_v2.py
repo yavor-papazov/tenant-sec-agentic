@@ -185,6 +185,26 @@ def test_example_uses_verified_vertex_baseline():
     assert restored.session.resume_artifacts is True
 
 
+def test_config_allows_bounded_assessment_parallelism(tmp_path):
+    raw = yaml.safe_load(
+        (ROOT / "assessment-config.example.yaml").read_text(encoding="utf-8")
+    )
+    raw["limits"]["max_parallel_assessments"] = 3
+    config_path = tmp_path / "assessment-config.yaml"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    config = load_assessment_config(config_path)
+    assert config.limits.max_parallel_assessments == 3
+
+    raw["limits"]["max_parallel_assessments"] = 4
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(
+        ValueError,
+        match="max_parallel_assessments must not exceed 3",
+    ):
+        load_assessment_config(config_path)
+
+
 def test_unknown_prohibits_score_and_mock_defaults_unknown(tmp_path):
     with pytest.raises(ValidationError):
         AssessorStructured(status="unknown", score=3, evidence="thin")

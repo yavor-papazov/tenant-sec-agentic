@@ -69,7 +69,7 @@ limits:
   max_search_calls_per_deep_research: 3
   max_fetch_calls_per_deep_research: 2
   max_projected_cost_usd: 4.0
-  max_parallel_assessments: 1
+  max_parallel_assessments: 3
 
 paths:
   repo_root: ../tenant-sec

@@ -155,8 +155,8 @@ def load_assessment_config(path: Path) -> AssessmentConfig:
         ),
         max_parallel_assessments=int(lim.get("max_parallel_assessments", 1)),
     )
-    if limits.max_parallel_assessments != 1:
-        raise ValueError("The first metered pilot must run sequentially")
+    if limits.max_parallel_assessments > 3:
+        raise ValueError("limits.max_parallel_assessments must not exceed 3")
     for name, value in vars(limits).items():
         if name == "max_projected_cost_usd":
             if value <= 0:
