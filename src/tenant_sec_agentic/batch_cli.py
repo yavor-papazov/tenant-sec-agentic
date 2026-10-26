@@ -25,6 +25,7 @@ from tenant_sec_agentic.model_preflight import (
     preflight_model_routes,
 )
 from tenant_sec_agentic.pipeline import (
+    assessment_inputs_match,
     current_assessment_input_hashes,
     prompt_hashes,
 )
@@ -256,10 +257,7 @@ def artifact_is_current(
         return False
     inputs = artifact.get("input_hashes") or {}
     expected_inputs = current_assessment_input_hashes(cfg, control_id)
-    if not expected_inputs or any(
-        inputs.get(key) != value
-        for key, value in expected_inputs.items()
-    ):
+    if not assessment_inputs_match(inputs, expected_inputs):
         return False
     return not validate_release_ready_assessment(artifact)
 

@@ -20,6 +20,7 @@ from tenant_sec_agentic.artifacts import (
 )
 from tenant_sec_agentic.config import load_assessment_config
 from tenant_sec_agentic.pipeline import (
+    assessment_inputs_match,
     current_assessment_input_hashes,
     prompt_hashes,
 )
@@ -54,10 +55,7 @@ def approved_entry(
         return False, None
     if expected_input_hashes is not None:
         inputs = a.get("input_hashes") or {}
-        if not expected_input_hashes or any(
-            inputs.get(name) != digest
-            for name, digest in expected_input_hashes.items()
-        ):
+        if not assessment_inputs_match(inputs, expected_input_hashes):
             return False, None
     rev = a.get("review") or {}
     if rev.get("payload_digest") != assessment_review_payload_digest(a):
@@ -132,10 +130,7 @@ def provisional_entry(
         return False, None
     if expected_input_hashes is not None:
         inputs = a.get("input_hashes") or {}
-        if not expected_input_hashes or any(
-            inputs.get(name) != digest
-            for name, digest in expected_input_hashes.items()
-        ):
+        if not assessment_inputs_match(inputs, expected_input_hashes):
             return False, None
     if validate_release_ready_assessment(a):
         return False, None
@@ -303,7 +298,7 @@ def main(argv: list[str] | None = None) -> None:
             else "human-reviewed"
         ),
         "review_note": (
-            "1.0-RC1 recommendations are AI-assisted and have not completed "
+            "Release-candidate recommendations are AI-assisted and have not completed "
             "human review."
             if args.provisional_unreviewed
             else "All published recommendations completed human review."

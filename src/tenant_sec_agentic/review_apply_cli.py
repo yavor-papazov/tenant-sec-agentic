@@ -19,6 +19,7 @@ from tenant_sec_agentic.config import (
     load_assessment_config,
 )
 from tenant_sec_agentic.pipeline import (
+    assessment_inputs_match,
     current_assessment_input_hashes,
     prompt_hashes,
 )
@@ -84,10 +85,7 @@ def apply_manifest(
                 cfg,
                 str(artifact.get("control") or ""),
             )
-            if not expected_inputs or any(
-                inputs.get(name) != digest
-                for name, digest in expected_inputs.items()
-            ):
+            if not assessment_inputs_match(inputs, expected_inputs):
                 validation_errors.append("assessment inputs are stale")
         if validation_errors:
             raise ValueError(

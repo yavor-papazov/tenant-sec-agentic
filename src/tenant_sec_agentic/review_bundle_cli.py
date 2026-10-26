@@ -17,6 +17,7 @@ from tenant_sec_agentic.config import (
     load_assessment_config,
 )
 from tenant_sec_agentic.pipeline import (
+    assessment_inputs_match,
     current_assessment_input_hashes,
     prompt_hashes,
 )
@@ -40,10 +41,7 @@ def _load_current(
         control_id = str(data.get("control") or "")
         input_hashes = data.get("input_hashes") or {}
         expected_inputs = current_assessment_input_hashes(cfg, control_id)
-        if not expected_inputs or any(
-            input_hashes.get(key) != value
-            for key, value in expected_inputs.items()
-        ):
+        if not assessment_inputs_match(input_hashes, expected_inputs):
             continue
         if data.get("status") != "needs_human_review":
             continue
@@ -74,7 +72,7 @@ def render_bundle(provider: str, artifacts: list[dict[str, Any]]) -> str:
         or (item.get("consistency") or {}).get("consistency_flags")
     ]
     lines = [
-        f"# {provider} RC1 assessment review",
+        f"# {provider} release-candidate assessment review",
         "",
         f"Generated: {datetime.now(timezone.utc).isoformat()}",
         f"Current artifacts: {len(artifacts)}",
@@ -208,7 +206,7 @@ def _manifest(provider: str, artifacts: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Generate RC1 human-review bundles"
+        description="Generate release-candidate human-review bundles"
     )
     parser.add_argument("--assessments-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)

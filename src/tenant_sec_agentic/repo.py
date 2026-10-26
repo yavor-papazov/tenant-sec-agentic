@@ -117,6 +117,8 @@ def load_provider_profiles_scores(
         if not slug or slug == exclude_slug:
             continue
         controls = data.get("controls") or {}
+        if not controls:
+            continue
         simplified: dict[str, Any] = {}
         for cid, entry in controls.items():
             if not isinstance(entry, dict):

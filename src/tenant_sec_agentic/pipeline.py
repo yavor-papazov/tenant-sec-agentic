@@ -157,6 +157,18 @@ def current_assessment_input_hashes(
     )
 
 
+def assessment_inputs_match(
+    saved: dict[str, str],
+    expected: dict[str, str],
+) -> bool:
+    """Match substantive inputs while allowing peer context to refresh."""
+    return bool(expected) and all(
+        saved.get(name) == digest
+        for name, digest in expected.items()
+        if name != "peer_context"
+    )
+
+
 def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 

@@ -1911,6 +1911,13 @@ def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
         "recommended_services": None,
         "overall_confidence": "low",
         "prompt_hashes": prompt_hashes(),
+        "input_hashes": {
+            "control_definition": "control",
+            "methodology": "methodology",
+            "provider_scope": "provider",
+            "peer_context": "old-peers",
+            "evidence_seeds": "seeds",
+        },
         "doc_fetch": {"retrieval_outcome": "succeeded"},
         "assessor": {
             "status": "unknown",
@@ -1924,6 +1931,13 @@ def test_current_pending_assessment_can_be_published_as_unreviewed_rc():
     assert ok is True
     assert entry["status"] == "unknown"
     assert "score" not in entry
+    expected_inputs = {
+        **assessment["input_hashes"],
+        "peer_context": "new-peers",
+    }
+    assert provisional_entry(assessment, expected_inputs)[0] is True
+    expected_inputs["methodology"] = "changed"
+    assert provisional_entry(assessment, expected_inputs) == (False, None)
 
     profile = {
         "methodology_version": "2.0",
