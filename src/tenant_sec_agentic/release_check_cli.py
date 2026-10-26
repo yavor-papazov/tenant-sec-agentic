@@ -103,12 +103,25 @@ def profile_completeness_errors(
     assessed_at = _date_or_none(profile.get("assessed_at"))
     for record in certifications:
         cert_id = str(record.get("id") or "unknown")
-        if not record.get("evidence"):
-            errors.append(f"certifications.{cert_id}: missing evidence")
-        if not record.get("status"):
-            errors.append(f"certifications.{cert_id}: missing status")
-        if not record.get("validity"):
-            errors.append(f"certifications.{cert_id}: missing validity")
+        required = (
+            "status",
+            "validity",
+            "scope",
+            "offering",
+            "regions",
+            "report_access",
+            "evidence",
+        )
+        missing = [
+            field
+            for field in required
+            if record.get(field) in (None, "", [])
+        ]
+        if missing:
+            errors.append(
+                f"certifications.{cert_id}: missing "
+                + ", ".join(missing)
+            )
         valid_until = _date_or_none(record.get("valid_until"))
         if (
             record.get("status") == "held"
@@ -118,7 +131,25 @@ def profile_completeness_errors(
             errors.append(
                 f"certifications.{cert_id}: fixed held record has no expiry"
             )
-        if assessed_at and valid_until and valid_until < assessed_at:
+        if (
+            record.get("status") == "held"
+            and record.get("validity") == "unknown"
+        ):
+            errors.append(
+                f"certifications.{cert_id}: held record has unknown validity"
+            )
+        services = record.get("services") or []
+        all_services = bool(record.get("all_services", False))
+        if record.get("status") == "held" and not services and not all_services:
+            errors.append(
+                f"certifications.{cert_id}: held record has no service scope"
+            )
+        if (
+            record.get("status") == "held"
+            and assessed_at
+            and valid_until
+            and valid_until < assessed_at
+        ):
             errors.append(
                 f"certifications.{cert_id}: expired before assessment date"
             )
@@ -167,10 +198,10 @@ def main(argv: list[str] | None = None) -> None:
         )
     if all_errors:
         raise SystemExit(
-            "RC1 publication check failed:\n" + "\n".join(all_errors)
+            "Publication check failed:\n" + "\n".join(all_errors)
         )
     print(
-        f"RC1 publication checks passed for {len(args.provider)} provider(s)"
+        f"Publication checks passed for {len(args.provider)} provider(s)"
     )
 
 

@@ -32,6 +32,7 @@ tenant-sec-batch = "tenant_sec_agentic.batch_cli:main"
 tenant-sec-review-bundle = "tenant_sec_agentic.review_bundle_cli:main"
 tenant-sec-review-apply = "tenant_sec_agentic.review_apply_cli:main"
 tenant-sec-release-check = "tenant_sec_agentic.release_check_cli:main"
+tenant-sec-m3 = "tenant_sec_agentic.m3_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tenant_sec_agentic"]

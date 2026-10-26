@@ -20,11 +20,14 @@ from tenant_sec_agentic.artifacts import (
 )
 from tenant_sec_agentic.config import load_assessment_config
 from tenant_sec_agentic.pipeline import (
+    assessment_input_hashes,
     assessment_inputs_match,
-    current_assessment_input_hashes,
     prompt_hashes,
 )
-from tenant_sec_agentic.repo import load_all_controls
+from tenant_sec_agentic.repo import (
+    load_all_controls,
+    load_methodology_or_interim,
+)
 
 ASSESSOR_ID = re.compile(
     r"^(self|community:[a-z0-9_-]+|accredited:[a-z0-9_-]+)$"
@@ -186,6 +189,11 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(f"Missing assessments folder: {prov_folder}")
 
     assessments = load_assessments(prov_folder)
+    control_definitions = load_all_controls(repo)
+    methodology_text, interim_methodology = load_methodology_or_interim(repo)
+    methodology_version = (
+        "interim-prd-4.4" if interim_methodology else "2.0"
+    )
     controls: dict = {}
     unapproved: list[str] = []
     for a in assessments:
@@ -193,7 +201,18 @@ def main(argv: list[str] | None = None) -> None:
         if not cid:
             continue
         rev = (a.get("review") or {}).get("status")
-        expected_inputs = current_assessment_input_hashes(cfg, str(cid))
+        control_definition = control_definitions.get(str(cid))
+        expected_inputs = (
+            assessment_input_hashes(
+                cfg,
+                control_definition,
+                methodology_text,
+                methodology_version,
+                {},
+            )
+            if isinstance(control_definition, dict)
+            else {}
+        )
         ok, entry = approved_entry(a, expected_inputs)
         if not ok and args.provisional_unreviewed:
             ok, entry = provisional_entry(a, expected_inputs)
@@ -313,10 +332,9 @@ def main(argv: list[str] | None = None) -> None:
         elif field in base:
             profile[field] = base[field]
     if args.provisional_unreviewed:
-        control_defs = load_all_controls(repo)
         exceptions = dict(profile.get("service_scope_exceptions") or {})
         for control_id, entry in controls.items():
-            definition = control_defs.get(control_id) or {}
+            definition = control_definitions.get(control_id) or {}
             if (
                 definition.get("service_scoped")
                 and entry.get("status") == "assessed"

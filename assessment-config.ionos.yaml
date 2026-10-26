@@ -2,6 +2,7 @@ provider:
   slug: ionos
   display_name: IONOS Cloud
   docs_base_url: https://docs.ionos.com/cloud
+  official_domains: [ionos.com]
   assessment_id: ionos/public/de-fra-1/standard
   offering:
     id: public
@@ -27,6 +28,9 @@ controls:
   scope: all
 
 evidence_seeds:
+  compute.serverless-security:
+    - https://docs.ionos.com/cloud/support/general-information/service-catalog
+    - https://docs.ionos.com/cloud/compute-services
   data.residency-guarantees:
     - https://docs.ionos.com/cloud/support/general-information/service-catalog
     - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/concepts/buckets
@@ -35,8 +39,21 @@ evidence_seeds:
     - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/object-storage-faqs
   enc.external-key-management:
     - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/concepts/s3-api-compatibility
+  enc.key-lifecycle:
+    - https://docs.ionos.com/cloud/compute-services/compute-engine/confidential-computing-vm/overview/limitations
+    - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/overview/features-benefits
+    - https://docs.ionos.com/cloud/api-reference/storage-and-backup/ionos-object-storage/ionos-object-storage-for-user-owned-buckets/uploads
+  gov.tagging-governance:
+    - https://docs.ionos.com/cloud/backup-and-storage/ionos-object-storage/concepts/s3-api-compatibility
+    - https://docs.ionos.com/cloud/tools-cli/subcommands/object-storage/bucket/tagging/put
+    - https://docs.ionos.com/cloud/tools-terraform/resources/s3_object
+    - https://docs.ionos.com/cloud/set-up-ionos-cloud/management/usage/cost-and-usage
   iam.external-idp-federation:
     - https://docs.ionos.com/cloud/management/identity-access-management/iam-federation
+  incident.resilience-testing:
+    - https://docs.ionos.com/cloud/containers/managed-kubernetes/overview
+    - https://docs.ionos.com/cloud/sdk-tools-home
+    - https://learn.cloud.ionos.com/expert/en/courses/module-7/unit-7.1-resilience-continuity.html
 
 models:
   doc_fetch: vertex_ai/gemini-2.5-flash

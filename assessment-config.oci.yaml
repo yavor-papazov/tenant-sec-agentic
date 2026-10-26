@@ -2,6 +2,7 @@ provider:
   slug: oci
   display_name: Oracle Cloud Infrastructure
   docs_base_url: https://docs.oracle.com/en-us/iaas
+  official_domains: [oracle.com]
   assessment_id: oci/public/eu-frankfurt-1/standard
   offering:
     id: public
@@ -32,6 +33,8 @@ controls:
   scope: all
 
 evidence_seeds:
+  m3.transfers:
+    - https://www.oracle.com/legal/privacy/services-privacy-policy/
   iam.external-idp-federation:
     - https://docs.oracle.com/en-us/iaas/Content/Identity/Tasks/federatingADFS.htm
   gov.preventive-policy:
@@ -43,6 +46,27 @@ evidence_seeds:
     - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Concepts/keyoverview.htm
   enc.external-key-management:
     - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Concepts/keyoverview.htm
+  enc.key-lifecycle:
+    - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Tasks/tasks_tasks_managingkeys_topic_edit_auto_key_rotation.htm
+    - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Tasks/managingkeys_topic-To_rotate_a_master_encryption_key.htm
+    - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Tasks/managingkeys_topic-To_delete_a_key.htm
+    - https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Tasks/managingkeys_topic-To_cancel_the_deletion_of_a_key.htm
+  gov.hierarchy-delegation:
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/compartments/Working_with_Compartments.htm
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/policieshow/Policy_Inheritance.htm
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/policieshow/Policy_Attachment.htm
+  iam.identity-lifecycle:
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/users/lifecycle-managing-users.htm
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/scim/select-provisioning-operations.htm
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/reports/dormant.htm
+    - https://docs.oracle.com/en/cloud/paas/access-governance/ildjm/
+    - https://docs.oracle.com/en/cloud/paas/access-governance/aseoa/index.html
+  iam.privileged-access:
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/policies/scoping-policy-by-time.htm
+    - https://docs.oracle.com/en-us/iaas/Content/Identity/conversion/security.htm
+    - https://docs.oracle.com/en/cloud/paas/access-governance/qcmcm/index.html
+    - https://docs.oracle.com/en/cloud/paas/access-governance/ijwgf/
+    - https://docs.oracle.com/en/cloud/paas/access-governance/pmapi/op-access-governance-access-controls-20250331-approvals-post.html
   log.immutability:
     - https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/usingobjectversioning.htm
   log.control-plane-audit:

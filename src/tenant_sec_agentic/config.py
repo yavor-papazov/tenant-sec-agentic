@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -17,6 +18,7 @@ class ProviderConfig:
     assessment_id: str
     offering: dict[str, Any]
     services_in_scope: list[dict[str, Any]]
+    official_domains: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -92,6 +94,7 @@ def load_assessment_config(path: Path) -> AssessmentConfig:
         assessment_id=str(p["assessment_id"]),
         offering=dict(p["offering"]),
         services_in_scope=list(p.get("services_in_scope") or []),
+        official_domains=_official_domains(p.get("official_domains")),
     )
     if not provider.services_in_scope:
         raise ValueError("provider.services_in_scope must be non-empty")
@@ -232,6 +235,7 @@ def config_to_serializable(cfg: AssessmentConfig) -> dict[str, Any]:
             "assessment_id": cfg.provider.assessment_id,
             "offering": cfg.provider.offering,
             "services_in_scope": cfg.provider.services_in_scope,
+            "official_domains": cfg.provider.official_domains,
         },
         "controls_scope": cfg.controls_scope,
         "models": cfg.models,
@@ -266,6 +270,7 @@ def config_from_state(data: dict[str, Any]) -> AssessmentConfig:
             assessment_id=p["assessment_id"],
             offering=dict(p["offering"]),
             services_in_scope=list(p["services_in_scope"]),
+            official_domains=_official_domains(p.get("official_domains")),
         ),
         controls_scope=data["controls_scope"],
         models=dict(data["models"]),
@@ -295,3 +300,34 @@ def config_from_state(data: dict[str, Any]) -> AssessmentConfig:
         ),
         mock_mode=bool(data.get("mock_mode", False)),
     )
+
+
+def _official_domains(value: Any) -> list[str]:
+    """Normalize optional provider-owned DNS suffixes."""
+    if value is None or value == []:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("provider.official_domains must be a list")
+    domains: list[str] = []
+    for raw in value:
+        domain = str(raw).strip().lower().rstrip(".")
+        parsed = urlparse(f"//{domain}")
+        if (
+            not domain
+            or parsed.hostname != domain
+            or parsed.port is not None
+            or "/" in domain
+            or any(part == "" for part in domain.split("."))
+        ):
+            raise ValueError(
+                "provider.official_domains entries must be DNS hostnames"
+            )
+        try:
+            domain = domain.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError(
+                "provider.official_domains entries must be DNS hostnames"
+            ) from exc
+        if domain not in domains:
+            domains.append(domain)
+    return domains

@@ -2,6 +2,7 @@ provider:
   slug: stackit
   display_name: STACKIT
   docs_base_url: https://docs.stackit.cloud
+  official_domains: [stackit.cloud, stackit.de]
   assessment_id: stackit/public/eu01/standard
   offering:
     id: public
@@ -29,17 +30,52 @@ controls:
   scope: all
 
 evidence_seeds:
+  m3.legal:
+    - https://framework.stackit.cloud/architecture/pillars/sovereignty/
+  m3.subcontracting:
+    - https://framework.stackit.cloud/architecture/pillars/sovereignty/sov-06-jurisdictional-chain/
+  m3.continuity:
+    - https://framework.stackit.cloud/adoption/adapting-operating-models/disaster-recovery/
+  m3.transfers:
+    - https://docs.stackit.cloud/platform/regions/
+  m3.vulnerability_disclosure:
+    - https://docs.stackit.cloud/platform/security-bulletin/
+  m3.certifications:
+    - https://docs.stackit.cloud/platform/regions/
+  compute.serverless-security:
+    - https://framework.stackit.cloud/architecture/assetcontainer/stackit/stackit-service-functions/
+  data.classification:
+    - https://framework.stackit.cloud/architecture/pillars/security/sec-03-data-classification/
   data.residency-guarantees:
     - https://docs.stackit.cloud/platform/regions/
     - https://docs.stackit.cloud/products/storage/object-storage/basics/architecture/
   enc.cmk:
     - https://docs.stackit.cloud/products/security/kms/
     - https://docs.stackit.cloud/products/security/secrets-manager/how-tos/kms-encryption-in-the-secrets-manager/
+  enc.confidential-computing:
+    - https://docs.stackit.cloud/products/compute-engine/server/basics/machine-types/
+    - https://www.stackit.de/de/agb/leistungsscheine/stackit-confidential-server/
   enc.external-key-management:
     - https://docs.stackit.cloud/products/security/kms/
+  enc.hsm-backing:
+    - https://docs.stackit.cloud/products/security/kms/how-tos/create-and-manage-keys/
+  incident.resilience-testing:
+    - https://framework.stackit.cloud/architecture/pillars/reliability/rel-10-health-model-and-testing/
   log.control-plane-audit:
     - https://docs.stackit.cloud/platform/audit-log/
     - https://docs.stackit.cloud/products/logging-and-monitoring/telemetry-router/basics/dataformats/
+  log.resource-inventory:
+    - https://docs.stackit.cloud/platform/resource-manager/basics/
+    - https://docs.stackit.cloud/products/security/cspm/basics/concepts/
+    - https://docs.stackit.cloud/platform/audit-log/
+  net.flow-logging:
+    - https://docs.stackit.cloud/products/network/core-networking/basics/architecture/
+    - https://docs.stackit.cloud/products/runtime/kubernetes-engine/basics/networking/container/
+  net.private-connectivity:
+    - https://docs.stackit.cloud/products/network/core-networking/network-area/basics/concepts/
+    - https://docs.stackit.cloud/products/network/connectivity-hybrid-multi-cloud/vpn/basics/
+    - https://docs.stackit.cloud/products/storage/object-storage/basics/architecture/
+    - https://docs.stackit.cloud/products/runtime/kubernetes-engine/how-tos/use-postgresql-and-mongodb-flex-with-ske/
 
 models:
   doc_fetch: vertex_ai/gemini-2.5-flash
