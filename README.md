@@ -106,6 +106,12 @@ Use a dedicated billed project and configure its budget controls first. Cloud
 Billing budgets are normally alerts, not hard caps; the pipeline's
 `max_projected_cost_usd` is the per-run enforcement backstop.
 
+## Next iteration and host handoff
+
+See [`TODO.md`](TODO.md) for the licensing-research backlog, executable
+tenant-control playbook design, evidence/citation follow-up, and the complete
+new-Mac restart checklist.
+
 ## Development
 
 ```bash
