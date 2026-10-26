@@ -85,7 +85,7 @@ class AssessmentClaim(BaseModel):
 class CriterionResult(BaseModel):
     level: int = Field(ge=0, le=3)
     met: bool
-    reasoning: str = Field(min_length=1, max_length=800)
+    reasoning: str = Field(min_length=1, max_length=1600)
     claim_ids: list[str] = Field(default_factory=list)
 
 
