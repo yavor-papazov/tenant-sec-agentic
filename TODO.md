@@ -276,6 +276,28 @@ the database is insufficient.
 Use the committed provider-specific configs as starting points. Copy one to
 `assessment-config.yaml` only when a local override is needed.
 
+### Original-host archive
+
+The 2026-10-26 migration archived the RC3 local-only state before retiring the
+original host:
+
+- 2,792 assessment, report, session, review, and validation files were packaged
+  into four compressed archives.
+- `.env`, Git metadata, virtual environments, and caches were excluded.
+- The active secret value from `.env` did not occur in the staged data.
+- The archives, redacted scan report, manifest, and SHA-256 checksums were
+  uploaded to a private EU Google Cloud Storage bucket.
+- Public access prevention, uniform bucket-level access, object versioning, and
+  seven-day soft deletion are enabled.
+- All seven uploaded objects were downloaded and hash-verified.
+- Recovery instructions and the manifest are versioned in the private
+  `ypapazov/tenant-sec-ops` repository.
+- The local-only core branch `rc2/provider-expansion` was pushed to
+  `ypapazov/tenant-sec`.
+
+The canonical provider profiles remain in `tenant-sec`; restoring the private
+archive is necessary only for audit, debugging, or exact session history.
+
 ## Restart checklist
 
 1. Pull `main` in both repositories and verify the commits listed above.
